@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server/proxy.js",
-    "test": "node tests/parseSpread.test.js"
+  "test": "node tests/parseSpread.test.js && node tests/analyze.test.js && node tests/pickOne.test.js && node tests/analyze.smoke.test.js && node tests/openai.mock.test.js"
   },
   "dependencies": {
     "express": "^4.18.2",
