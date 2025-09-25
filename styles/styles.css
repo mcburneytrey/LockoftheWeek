@@ -1,0 +1,48 @@
+:root {
+  --bg1: #0b1220; --bg2: #0f1320; --card: #0f1320ee; --ink: #e5e7eb;
+  --indigo: #6366f1; --pink: #ec4899; --amber: #fbbf24; --emerald: #10b981;
+}
+* { box-sizing: border-box; }
+html, body { margin:0; height:100%; }
+body { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color: var(--ink); background: radial-gradient(60% 60% at 100% 0%, rgba(99,102,241,.25), transparent 60%), radial-gradient(60% 60% at 0% 100%, rgba(236,72,153,.25), transparent 60%), var(--bg1); }
+.scan { position: fixed; inset: 0; pointer-events: none; background: repeating-linear-gradient(0deg, rgba(255,255,255,0.10) 0px, rgba(255,255,255,0.10) 1px, transparent 1px, transparent 3px); opacity:.08; }
+.container { max-width: 980px; margin: 0 auto; padding: 32px 16px 56px; }
+.row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.h1 { font-family: Orbitron, Inter, sans-serif; font-weight: 900; font-size: clamp(28px, 4.5vw, 40px); letter-spacing: 0.5px; background: linear-gradient(90deg, #a5b4fc, #f9a8d4, #fde68a); -webkit-background-clip: text; background-clip:text; color:transparent; text-shadow: 0 3px 0 rgba(0,0,0,.5); margin:0; }
+.sub { color:#9ca3af; font-size:12px; letter-spacing:.25em; font-family: "Share Tech Mono", monospace; }
+.badge { border:1px solid #374151; background:#11152a; padding:6px 10px; border-radius:10px; font-family:"Share Tech Mono", monospace; letter-spacing:.25em; font-size:12px; }
+
+.card { position: relative; background: var(--card); border: 1px solid rgba(99,102,241,.3); border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+.card-glow { position:absolute; inset:-1px; border-radius:16px; background: linear-gradient(135deg, rgba(99,102,241,.12), rgba(236,72,153,.08), transparent 70%); pointer-events:none; }
+.card-head { padding: 18px 18px 0; display:flex; align-items:center; gap:10px; font-family:"Share Tech Mono", monospace; letter-spacing:.25em; color:#d1d5db; font-size: 14px; }
+.card-body { padding: 24px 18px 28px; }
+
+.teams { display:grid; grid-template-columns: 1fr; gap:24px; align-items:center; }
+@media (min-width: 800px) { .teams { grid-template-columns: 1fr 1fr 1fr; gap: 28px; } }
+
+.teambox { padding:18px 22px; border-radius: 14px; border:1px solid rgba(255,255,255,.18); box-shadow: inset 0 0 0 2px rgba(255,255,255,.08); }
+.teambox.home { background: linear-gradient(180deg, #1a1f2b, #121725); border-color: rgba(99,102,241,.35); }
+.teambox.away { background: linear-gradient(180deg, #2b1a1f, #251217); border-color: rgba(236,72,153,.35); }
+.teamlbl { font-family:"Share Tech Mono"; font-size:10px; letter-spacing:.3em; color:#9ca3af; }
+.teamname { font-weight: 900; font-size: clamp(22px, 3.5vw, 30px); text-shadow: 0 2px 0 rgba(0,0,0,.6); }
+
+.spreadlbl { text-align:center; font-family:"Share Tech Mono"; color:#9ca3af; font-size:11px; letter-spacing:.3em; margin-bottom:6px; }
+.spreadtxt { text-align:center; font-weight: 900; font-size: clamp(36px, 6vw, 54px); text-shadow: 0 4px 0 rgba(0,0,0,0.6); }
+.spreadtxt .fav { color:#fde68a; }
+.spreadtxt .num { color:#f9a8d4; }
+.kick { text-align:center; margin-top:10px; color:#cbd5e1; font-family:"Share Tech Mono"; letter-spacing:.25em; font-size: 12px; }
+.source { text-align:center; margin-top:6px; color:#94a3b8; font-family:"Share Tech Mono"; font-size: 11px; }
+
+.btn { border:1px solid #374151; background:#11152a; color:var(--ink); padding:10px 14px; border-radius: 10px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:8px; }
+.btn:hover { filter: brightness(1.1); }
+
+.ribbon { display:flex; align-items:center; justify-content:center; gap:10px; margin-top:18px; }
+.pill { border:1px solid rgba(16,185,129,.2); color:#bbf7d0; background: rgba(16,185,129,.15); padding:6px 10px; border-radius:12px; font-family:"Share Tech Mono"; font-size:12px; letter-spacing:.25em; }
+.pill2 { border:1px solid #374151; color:#e5e7eb; background: transparent; padding:6px 10px; border-radius:12px; font-family:"Share Tech Mono"; font-size:12px; letter-spacing:.25em; }
+
+.foot { margin-top:28px; text-align:center; color:#94a3b8; font-size:12px; font-family:"Share Tech Mono"; letter-spacing:.25em; }
+
+.logo { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; background:#151823; border:1px solid rgba(99,102,241,.3); box-shadow: 0 8px 20px rgba(0,0,0,.35); }
+.lock { width:18px; height:18px; }
+
+.loading { text-align:center; padding:40px 0; color:#9ca3af; font-family:'Share Tech Mono', monospace }

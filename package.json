@@ -1,0 +1,13 @@
+{
+  "name": "lockoftheweek",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "node server/proxy.js",
+    "test": "node tests/parseSpread.test.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^2.6.7"
+  }
+}
