@@ -9,7 +9,10 @@ const PORT = process.env.PORT || 3000;
 let analyzeGamesLocal = null;
 try {
   // js/app.js exports analyzeGames when required in Node
-  analyzeGamesLocal = require(path.join(__dirname, '..', 'js', 'app.js')).analyzeGames;
+  const appModule = require(path.join(__dirname, '..', 'js', 'app.js'));
+  analyzeGamesLocal = appModule.analyzeGames;
+  // also try to import pickOne for server-side deterministic pick
+  var pickOneLocal = appModule.pickOne;
 } catch (e) {
   console.warn('Local analyzeGames not available as module:', e && e.message ? e.message : e);
 }
@@ -297,6 +300,106 @@ Respond ONLY with valid JSON. Do not include any extraneous commentary.`;
     console.error('OpenAI call failed:', err && err.stack ? err.stack : String(err));
     if (typeof analyzeGamesLocal === 'function') return res.json(analyzeGamesLocal(games, { seed }));
     return res.status(502).json({ error: 'openai_call_failed', detail: String(err) });
+  }
+});
+
+// GET /api/currentPick
+// Computes the deterministic weekly pick server-side so clients can fetch the authoritative pick
+app.get('/api/currentPick', async (req, res) => {
+  try {
+    if (typeof pickOneLocal !== 'function') return res.status(501).json({ error: 'server_pick_not_available' });
+    // Collect next 7 days of scoreboard events
+    const dates = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      const ct = new Date(d.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+      ct.setDate(ct.getDate() + i);
+      const y = ct.getFullYear();
+      const m = String(ct.getMonth() + 1).padStart(2, '0');
+      const day = String(ct.getDate()).padStart(2, '0');
+      return `${y}${m}${day}`;
+    });
+
+    const games = [];
+    for (const date of dates) {
+      const key = `scoreboard:${date}`;
+      const now = Date.now();
+      let data = null;
+      const cached = cache.get(key);
+      if (cached && (now - cached.ts) < TTL) data = cached.data;
+      else {
+        const url = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?dates=${encodeURIComponent(date)}`;
+        try {
+          const upstream = await fetch(url, { timeout: 10000 });
+          if (upstream.ok) {
+            data = await upstream.json();
+            cache.set(key, { ts: now, data });
+          }
+        } catch (e) { /* ignore per-day errors */ }
+      }
+      if (!data) continue;
+      const events = data.events || [];
+      for (const ev of events) {
+        try {
+          const comp = ev.competitions?.[0];
+          if (!comp) continue;
+          const dateISO = comp.date || ev.date;
+          const competitors = comp.competitors || [];
+          const homeComp = competitors.find(c => c.homeAway === 'home');
+          const awayComp = competitors.find(c => c.homeAway === 'away');
+          const home = homeComp?.team?.displayName;
+          const away = awayComp?.team?.displayName;
+          const homeId = homeComp?.team?.id || homeComp?.team?.teamId;
+          const awayId = awayComp?.team?.id || awayComp?.team?.teamId;
+          if (!home || !away) continue;
+          const odds = (comp.odds && comp.odds[0]) || null;
+          // Use the same parsing function as the client by asking analyzeGamesLocal module if present
+          let spreadTeam = null, spread = null;
+          try {
+            const parsed = require(path.join(__dirname, '..', 'js', 'app.js')).parseSpreadFromOdds(odds, home, away);
+            spreadTeam = parsed.spreadTeam; spread = parsed.spread;
+          } catch (e) { /* ignore parsing errors */ }
+          const homeScore = homeComp?.score != null ? Number(homeComp.score) : undefined;
+          const awayScore = awayComp?.score != null ? Number(awayComp.score) : undefined;
+          const status = comp?.status?.type?.name || ev?.status?.type?.name;
+          const gid = ev?.id || comp?.id || `${home}-${away}-${dateISO}`;
+
+          // Fetch recent results for home team (reuse teamRecent logic locally)
+          let recent = { lastResults: [], consecutiveWins: 0 };
+          try {
+            const teamUrl = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/${encodeURIComponent(homeId)}/schedule`;
+            const upstream = await fetch(teamUrl, { timeout: 10000 });
+            if (upstream.ok) {
+              const td = await upstream.json();
+              let events2 = td?.events || td?.schedule || [];
+              try { events2 = Array.from(events2).sort((a,b)=> new Date(b?.date || b?.startDate || 0) - new Date(a?.date || a?.startDate || 0)); } catch(e){}
+              const lastResults = [];
+              for (const ev2 of events2) {
+                try {
+                  const comp2 = ev2.competitions?.[0] || ev2.competitions || null; if (!comp2) continue;
+                  const competitor = comp2.competitors?.find(c => String(c?.team?.id) === String(homeId) || String(c?.team?.teamId) === String(homeId));
+                  if (!competitor) continue;
+                  if (typeof competitor.winner !== 'undefined') lastResults.push(competitor.winner ? 'W' : 'L');
+                  else if (competitor.score != null && comp2.competitors){ const other = comp2.competitors.find(c=>c !== competitor); if (other && other.score != null) lastResults.push(Number(competitor.score) > Number(other.score) ? 'W' : 'L'); }
+                  if (lastResults.length >= 10) break;
+                } catch (e) { /* ignore */ }
+              }
+              const mostRecent = lastResults.slice(0,10);
+              let consecutiveWins = 0; for (const r of mostRecent){ if (/^W/i.test(r)) consecutiveWins++; else break; }
+              recent = { lastResults: mostRecent, consecutiveWins };
+            }
+          } catch (e) { /* ignore team recent fetch errors */ }
+
+          games.push({ id: gid, home, away, homeId, awayId, spreadTeam, spread, kickoff: dateISO, status, homeScore, awayScore, homeLastResults: recent.lastResults, homeConsecutiveWins: recent.consecutiveWins, source: { provider: odds?.provider?.name || 'ESPN' } });
+        } catch (e) { /* ignore per-event */ }
+      }
+    }
+
+    const pick = pickOneLocal(games);
+    if (!pick) return res.status(204).end();
+    return res.json(pick);
+  } catch (err) {
+    console.error('api/currentPick failed', err && err.stack ? err.stack : String(err));
+    return res.status(500).json({ error: 'current_pick_failed', detail: String(err) });
   }
 });
 

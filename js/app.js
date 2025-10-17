@@ -637,6 +637,119 @@ function ensureAnalysisUI(){
   return;
 }
 
+// Debug panel: show normalized games and why they were excluded or included
+function getRejectionReason(g){
+  try {
+    if (!g) return 'missing game object';
+    if (!g.home || !g.away) return 'missing teams';
+    if (typeof g.spread !== 'number') return 'missing numeric spread';
+    if (!g.spreadTeam) return 'missing spreadTeam (favorite not declared)';
+    // Check recent-wins indicators
+    if (Array.isArray(g.homeLastResults) && g.homeLastResults.length >= 2) {
+      if (/^W/i.test(String(g.homeLastResults[0])) && /^W/i.test(String(g.homeLastResults[1]))) return 'ok';
+      const recent3 = g.homeLastResults.slice(0,3);
+      const winsIn3 = recent3.filter(x => /^W/i.test(String(x))).length;
+      if (winsIn3 >= 2) return 'ok (2-in-3)';
+      return 'home lacks 2 wins in recent results';
+    }
+    if (typeof g.homeConsecutiveWins === 'number') {
+      if (g.homeConsecutiveWins >= 2) return 'ok';
+      return 'home consecutiveWins < 2';
+    }
+    return 'no recent results available';
+  } catch (e) { return 'error computing reason'; }
+}
+
+function renderDebugPanel(games){
+  if (typeof document === 'undefined') return;
+  // create container if needed
+  let root = document.getElementById('debugPanelContainer');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'debugPanelContainer';
+    root.style.padding = '8px';
+    root.style.borderTop = '1px solid #eee';
+    root.style.background = '#fafafa';
+    // place near bottom of body
+    const app = document.getElementById('app') || document.body;
+    app.appendChild(root);
+  }
+
+  // Toggle control
+  let toggle = document.getElementById('debugToggle');
+  if (!toggle) {
+    toggle = document.createElement('button');
+    toggle.id = 'debugToggle';
+    toggle.className = 'btn';
+    toggle.style.margin = '6px 0';
+    toggle.textContent = 'Show debug panel';
+    toggle.onclick = () => {
+      const panel = document.getElementById('debugPanel');
+      if (!panel) return;
+      const visible = panel.style.display !== 'none';
+      panel.style.display = visible ? 'none' : 'block';
+      toggle.textContent = visible ? 'Show debug panel' : 'Hide debug panel';
+    };
+    root.appendChild(toggle);
+  }
+
+  // create content panel
+  let panel = document.getElementById('debugPanel');
+  if (!panel) {
+    panel = document.createElement('div');
+    panel.id = 'debugPanel';
+    panel.style.display = 'none';
+    panel.style.marginTop = '8px';
+    panel.style.maxHeight = '260px';
+    panel.style.overflow = 'auto';
+    panel.style.fontSize = '13px';
+    root.appendChild(panel);
+  }
+
+  if (!Array.isArray(games) || !games.length) {
+    panel.innerHTML = '<div class="small">No games normalized for debug.</div>';
+    return;
+  }
+
+  const rows = games.map(g => {
+    const reason = getRejectionReason(g);
+    const lr = Array.isArray(g.homeLastResults) ? g.homeLastResults.join(',') : (g.homeConsecutiveWins != null ? `consec:${g.homeConsecutiveWins}` : 'n/a');
+    return `<div style="padding:6px;border-bottom:1px solid #eee;">` +
+      `<div style="font-weight:600">${escapeHtml(g.home)} (home) vs ${escapeHtml(g.away)}</div>` +
+      `<div>ID: ${escapeHtml(String(g.id || ''))} | Spread: ${escapeHtml(String(g.spread || ''))} | SpreadTeam: ${escapeHtml(String(g.spreadTeam || ''))}</div>` +
+      `<div>Recent: ${escapeHtml(lr)} | Kickoff: ${escapeHtml(String(g.kickoff || ''))}</div>` +
+      `<div style="color:${reason.startsWith('ok') ? 'green' : '#a00'};font-weight:600">Status: ${escapeHtml(reason)}</div>` +
+    `</div>`;
+  }).join('');
+
+  panel.innerHTML = rows;
+}
+
+function ensureDebugUI(){
+  if (typeof document === 'undefined') return;
+  // If header exists, add a small link to open the debug panel quickly
+  const header = document.getElementById('header') || document.body;
+  if (!document.getElementById('openDebugBtn')) {
+    const b = document.createElement('button');
+    b.id = 'openDebugBtn';
+    b.className = 'btn';
+    b.style.marginLeft = '8px';
+    b.textContent = 'Debug';
+    b.onclick = async () => {
+      // re-run normalization and fetch recent results so the panel has current data
+      try {
+        const events = await loadUpcomingGames();
+        const games = normalizeGames(events);
+        await fetchRecentResultsForGames(games);
+        renderDebugPanel(games);
+        const panel = document.getElementById('debugPanel');
+        if (panel) { panel.style.display = 'block'; document.getElementById('debugToggle').textContent = 'Hide debug panel'; }
+      } catch (e) { console.warn('open debug failed', e); }
+    };
+    header.appendChild(b);
+  }
+}
+
 // why modal removed per user request
 
 async function start(){
@@ -662,11 +775,41 @@ async function start(){
 async function startWithAnalysis(){
   ensureAnalysisUI();
   try {
+    // First, try to fetch an authoritative server-side pick (so clients display the same deterministic pick)
+    try {
+      const r = await fetch('/api/currentPick');
+      if (r.ok && r.status !== 204) {
+        const serverPick = await r.json();
+        if (serverPick && serverPick.id) {
+          // If the picked game's kickoff has already started, show loading and poll for the next lock
+          if (typeof window !== 'undefined' && typeof serverPick.kickoff === 'string') {
+            try {
+              const ko = new Date(serverPick.kickoff);
+              const now = new Date();
+              if (now >= ko) {
+                renderLoadingNextLock();
+                pollForNextLock();
+                return;
+              }
+            } catch (e) { /* continue to render */ }
+          }
+          renderGame(serverPick);
+          ensureDebugUI();
+          // Also populate debug panel with the single server pick for transparency
+          if (typeof renderDebugPanel === 'function') renderDebugPanel([serverPick]);
+          return;
+        }
+      }
+    } catch (e) {
+      // network/proxy might not be available — continue with local flow
+      console.warn('server currentPick fetch failed, falling back to local', e);
+    }
+
     const events = await loadUpcomingGames();
     const games = normalizeGames(events);
-  // Fetch recent home-team results (so pickOne can require two prior wins)
+    // Fetch recent home-team results (so pickOne can require two prior wins)
     await fetchRecentResultsForGames(games);
-  const pick = pickOne(games);
+    const pick = pickOne(games);
   if (pick) {
       // If the picked game's kickoff has already started, show loading and poll for the next lock
       if (typeof window !== 'undefined' && typeof pick.kickoff === 'string') {
