@@ -127,6 +127,56 @@ app.get('/espn/scoreboard', async (req, res) => {
   }
 });
 
+// GET /espn/teamRecent?teamId=123
+// Returns { teamId, teamName, lastResults: ['W','L',...], consecutiveWins: N }
+app.get('/espn/teamRecent', async (req, res) => {
+  const teamId = req.query.teamId;
+  if (!teamId) return res.status(400).json({ error: 'missing teamId' });
+
+  const key = `teamRecent:${teamId}`;
+  const now = Date.now();
+  const cached = cache.get(key);
+  if (cached && (now - cached.ts) < (60 * 1000)) return res.json(cached.data);
+
+  // ESPN team schedule endpoint (public)
+  const url = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/${encodeURIComponent(teamId)}/schedule`;
+  try {
+    const upstream = await fetch(url, { timeout: 10000 });
+    if (!upstream.ok) return res.status(502).json({ error: 'upstream_non_ok', status: upstream.status });
+    const data = await upstream.json();
+
+    // Extract recent results from schedule.events (most recent first) or data.events
+    const events = data?.events || data?.schedule || [];
+    const lastResults = [];
+    for (const ev of events) {
+      try {
+        const comp = ev.competitions?.[0] || ev.competitions || null;
+        if (!comp) continue;
+        // find competitor matching this team
+        const competitor = comp.competitors?.find(c => String(c?.team?.id) === String(teamId) || String(c?.team?.teamId) === String(teamId));
+        if (!competitor) continue;
+        const result = (competitor?.winner) ? 'W' : ((competitor?.status?.type?.name === 'STATUS_FINAL') ? 'L' : 'T');
+        lastResults.push(result);
+        if (lastResults.length >= 10) break;
+      } catch (e) { /* ignore per-event errors */ }
+    }
+
+    // Filter to most recent (assuming ESPN returns schedule chronological; reverse if needed)
+    const mostRecent = lastResults.slice(0, 10);
+    let consecutiveWins = 0;
+    for (const r of mostRecent) {
+      if (/^W/i.test(r)) consecutiveWins++; else break;
+    }
+
+    const out = { teamId, teamName: data?.team?.displayName || data?.team?.name || null, lastResults: mostRecent, consecutiveWins };
+    cache.set(key, { ts: now, data: out });
+    return res.json(out);
+  } catch (err) {
+    console.error('teamRecent proxy error:', err && err.stack ? err.stack : String(err));
+    return res.status(502).json({ error: 'upstream_error', detail: String(err) });
+  }
+});
+
 // POST /api/analyze
 // Body: { games: [ ... ], seed?: number }
 // If OPENAI_API_KEY is set, call the OpenAI Chat Completions API to request a JSON scoring response.

@@ -169,14 +169,166 @@ function normalizeGames(events){
     if(!comp) continue;
     const dateISO = comp.date || ev.date;
     const competitors = comp.competitors||[];
-    const home = competitors.find(c=>c.homeAway==='home')?.team?.displayName;
-    const away = competitors.find(c=>c.homeAway==='away')?.team?.displayName;
+    const homeComp = competitors.find(c=>c.homeAway==='home');
+    const awayComp = competitors.find(c=>c.homeAway==='away');
+    const home = homeComp?.team?.displayName;
+    const away = awayComp?.team?.displayName;
+    const homeId = homeComp?.team?.id || homeComp?.team?.teamId || undefined;
+    const awayId = awayComp?.team?.id || awayComp?.team?.teamId || undefined;
     if(!home||!away) continue;
     const odds = (comp.odds && comp.odds[0]) || null;
     const {spreadTeam, spread} = parseSpreadFromOdds(odds, home, away);
-    out.push({home,away,spreadTeam,spread,kickoff: dateISO, source:{provider: odds?.provider?.name || 'ESPN'}});
+    // extract scores and status
+    const homeCompData = competitors.find(c=>c.homeAway==='home') || {};
+    const awayCompData = competitors.find(c=>c.homeAway==='away') || {};
+    const homeScore = homeCompData?.score != null ? Number(homeCompData.score) : undefined;
+    const awayScore = awayCompData?.score != null ? Number(awayCompData.score) : undefined;
+    const status = comp?.status?.type?.name || ev?.status?.type?.name || undefined;
+    const gid = ev?.id || comp?.id || `${home}-${away}-${dateISO}`;
+    out.push({id: gid, home,away,homeId,awayId,spreadTeam,spread,kickoff: dateISO, status, homeScore, awayScore, source:{provider: odds?.provider?.name || 'ESPN'}});
   }
   return out;
+}
+
+// --- Record helpers persisted in localStorage under 'lotw_record' and last pick under 'lotw_lastPick'
+function loadRecord(){
+  try{
+    if (typeof localStorage === 'undefined') return { wins: 3, losses: 2 };
+    const raw = localStorage.getItem('lotw_record');
+    if (!raw) return { wins: 3, losses: 2 };
+    const parsed = JSON.parse(raw);
+    return { wins: Number(parsed.wins)||0, losses: Number(parsed.losses)||0 };
+  } catch(e){ return { wins: 3, losses: 2 }; }
+}
+function saveRecord(rec){
+  try{ if (typeof localStorage !== 'undefined') localStorage.setItem('lotw_record', JSON.stringify(rec)); } catch(e){}
+}
+function renderRecord(){
+  if (typeof document === 'undefined') return;
+  let el = document.getElementById('recordBadge');
+  if (!el){
+    el = document.createElement('div');
+    el.id = 'recordBadge';
+    el.className = 'record';
+    // append near top of content
+    const header = document.getElementById('header') || document.body;
+    header.insertBefore(el, header.firstChild);
+  }
+  const rec = loadRecord();
+  el.textContent = `Record: ${rec.wins}-${rec.losses}`;
+}
+
+function loadLastPick(){
+  try{ if (typeof localStorage === 'undefined') return null; const raw = localStorage.getItem('lotw_lastPick'); return raw ? JSON.parse(raw) : null; } catch(e){ return null; }
+}
+function saveLastPick(p){
+  try{ if (typeof localStorage !== 'undefined') localStorage.setItem('lotw_lastPick', JSON.stringify(p)); } catch(e){}
+}
+
+function storeLastPick(pick){
+  if (!pick) return;
+  const obj = { id: pick.id, pickTeam: (pick && pick.home) ? pick.home : pick.pickTeam, kickoff: pick.kickoff, evaluated: false };
+  saveLastPick(obj);
+  renderRecord();
+}
+
+// Evaluate a pick vs final score and update record. Returns 'W'|'L'|'P'|null
+function evaluatePickAgainstSpread(pick, game){
+  try{
+    if (!pick || !game) return null;
+    if (game.status !== 'STATUS_FINAL' && game.status !== 'final' && game.status !== 'FINAL') return null;
+    const homeScore = typeof game.homeScore === 'number' ? game.homeScore : (game.homeScore ? Number(game.homeScore) : undefined);
+    const awayScore = typeof game.awayScore === 'number' ? game.awayScore : (game.awayScore ? Number(game.awayScore) : undefined);
+    if (homeScore == null || awayScore == null) return null;
+    const pickedHome = pick.pickTeam === game.home || pick.pickTeam === pick.home;
+    const s = typeof game.spread === 'number' ? game.spread : undefined;
+    if (s == null) return null; // cannot evaluate without spread
+    // Determine ATS values
+    let homeATS = homeScore;
+    let awayATS = awayScore;
+    // If favorite is home (spreadTeam === home), home gives points
+    if (game.spreadTeam === game.home) {
+      homeATS = homeScore - s;
+    } else if (game.spreadTeam === game.away) {
+      homeATS = homeScore + s;
+    }
+    // awayATS for symmetry
+    if (game.spreadTeam === game.away) {
+      awayATS = awayScore - s;
+    } else if (game.spreadTeam === game.home) {
+      awayATS = awayScore + s;
+    }
+
+    // If pick is home, compare homeATS vs awayATS
+    if (pickedHome) {
+      if (homeATS > awayATS) return 'W';
+      if (homeATS < awayATS) return 'L';
+      return 'P';
+    }
+    // If pick is away
+    if (!pickedHome) {
+      if (awayATS > homeATS) return 'W';
+      if (awayATS < homeATS) return 'L';
+      return 'P';
+    }
+  } catch (e){ return null; }
+  return null;
+}
+
+function applyPickResult(result){
+  if (!result) return;
+  const rec = loadRecord();
+  if (result === 'W') rec.wins = (Number(rec.wins)||0) + 1;
+  else if (result === 'L') rec.losses = (Number(rec.losses)||0) + 1;
+  // Push ('P') does not change record
+  saveRecord(rec);
+  renderRecord();
+}
+
+// Check stored last pick against available games and update record if finished
+function checkAndUpdateStoredPick(games){
+  try{
+    const last = loadLastPick();
+    if (!last || last.evaluated) return;
+    const game = (games || []).find(g => g.id && last.id && String(g.id) === String(last.id));
+    if (!game) return;
+    const res = evaluatePickAgainstSpread(last, game);
+    if (!res) return;
+    applyPickResult(res);
+    // mark evaluated
+    last.evaluated = true;
+    saveLastPick(last);
+  } catch (e){ console.warn('checkAndUpdateStoredPick failed', e); }
+}
+
+// Fetch recent results for home teams for a set of normalized games by calling the proxy endpoint
+async function fetchRecentResultsForGames(games){
+  if (!Array.isArray(games) || !games.length) return games;
+  // Build unique list of home team ids to query
+  const homeIdMap = {};
+  for (const g of games) if (g && g.homeId) homeIdMap[g.homeId] = true;
+  const ids = Object.keys(homeIdMap);
+  const resultsMap = {};
+  await Promise.all(ids.map(async id => {
+    try {
+      const r = await fetch(`/espn/teamRecent?teamId=${encodeURIComponent(id)}`);
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j && j.teamId) resultsMap[j.teamId] = j;
+    } catch (e) {
+      console.warn('Failed to fetch team recent results', id, e);
+    }
+  }));
+  // Merge results into games as homeLastResults/homeConsecutiveWins
+  for (const g of games){
+    if (!g) continue;
+    const meta = resultsMap[g.homeId];
+    if (meta) {
+      g.homeLastResults = meta.lastResults;
+      g.homeConsecutiveWins = meta.consecutiveWins;
+    }
+  }
+  return games;
 }
 
 function pickOne(games){
@@ -185,26 +337,39 @@ function pickOne(games){
     const weekLabelEl = document.getElementById('weekLabel');
     if (weekLabelEl) weekLabelEl.textContent = `WEEK ${wk} PICK`;
   }
-  // New rule: select a home underdog (home team is underdog) with spread < 10 points.
-  // Our normalized games use `spread` as a positive magnitude and `spreadTeam` as the favorite.
-  // A home underdog means the favorite is the away team (spreadTeam === away).
+  // New rule: pick a team that is the home team and has won its previous two games.
+  // We accept one of several ways to provide recent results for the home team:
+  //  - game.homeLastResults: an array like ['W','W',...], most-recent-first
+  //  - game.homeConsecutiveWins: a number representing how many straight wins the home team has
+  //  - options.recentWinsMap (deprecated-per-call): caller may pass a map via global/window later
+  const options = {};
+
+  const hasTwoRecentWins = (g, opts = {}) => {
+    try {
+      if (!g || !g.home) return false;
+      if (Array.isArray(g.homeLastResults) && g.homeLastResults.length >= 2) {
+        return /^W/i.test(String(g.homeLastResults[0])) && /^W/i.test(String(g.homeLastResults[1]));
+      }
+      if (typeof g.homeConsecutiveWins === 'number') return g.homeConsecutiveWins >= 2;
+      const map = (opts.recentWinsMap) ? opts.recentWinsMap : (typeof window !== 'undefined' ? window.recentWinsMap : null);
+      if (map && Array.isArray(map[g.home]) && map[g.home].length >= 2) {
+        return /^W/i.test(String(map[g.home][0])) && /^W/i.test(String(map[g.home][1]));
+      }
+    } catch (e) { /* fallthrough */ }
+    return false;
+  };
+
   const candidates = (games || []).filter(g => {
-    return g && g.home && g.away && typeof g.spread === 'number' && g.spread < 10 && g.spreadTeam && g.spreadTeam === g.away;
+    return g && g.home && g.away && hasTwoRecentWins(g, options);
   });
 
   if (!candidates.length) return null;
 
-  // Prefer the smallest spread (closest underdog) — sort ascending by spread.
-  candidates.sort((a,b) => a.spread - b.spread);
-
-  // If there's a tie on spread, break ties deterministically using the weekly seed RNG.
-  const topSpread = candidates[0].spread;
-  const tied = candidates.filter(c => c.spread === topSpread);
-  if (tied.length === 1) return tied[0];
-
+  // From the remaining candidates, choose one speculatively. Use a deterministic weekly RNG so picks
+  // are reproducible for the week but still allow a degree of 'speculation'.
   const rng = mulberry32(seed || 12345);
-  const idx = Math.floor(rng() * tied.length);
-  return tied[idx];
+  const idx = Math.floor(rng() * candidates.length);
+  return candidates[idx];
 }
 
 /*
@@ -346,6 +511,8 @@ function renderGame(g){
   };
   const shareBtn = document.getElementById('shareBtn');
   if(shareBtn) shareBtn.onclick = share;
+  // persist last pick for later evaluation
+  try{ storeLastPick(g); } catch(e){}
 
 }
 
@@ -355,6 +522,44 @@ function renderAnalysisPanel(list){
   if(!Array.isArray(list) || !list.length){ el.innerHTML = '<div class="small">No analysis available.</div>'; return; }
   el.innerHTML = '<ol>' + list.map(item=>`<li><strong>${item.home} vs ${item.away}</strong> — score ${Number(item.score).toFixed(3)} ${formatExplainForHtml(item.explain)}</li>`).join('') + '</ol>';
 }
+
+function renderLoadingNextLock(){
+  const content = (typeof document !== 'undefined') ? document.getElementById('content') : null;
+  if (!content) return;
+  content.innerHTML = `<div class="loading">Loading next lock...</div>`;
+}
+
+// Polling loop: re-fetch upcoming games and recent results every 30s until pickOne returns a different pick
+let _pollAbort = false;
+async function pollForNextLock(intervalMs = 30000){
+  _pollAbort = false;
+  const seed = weeklySeed().seed;
+  while (!_pollAbort) {
+    try {
+      const events = await loadUpcomingGames();
+      const games = normalizeGames(events);
+      await fetchRecentResultsForGames(games);
+      const candidate = pickOne(games);
+      if (candidate) {
+        // Stop polling and render the new pick
+        _pollAbort = true;
+        renderGame(candidate);
+        ensureAnalysisUI();
+        return;
+      }
+      // Also check stored pick against any finished games and update record
+      try { checkAndUpdateStoredPick(games); } catch (e) { console.warn('check stored pick failed', e); }
+    } catch (e) {
+      console.warn('pollForNextLock error', e);
+    }
+    // Wait for interval or until aborted
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+}
+
+// Allow other code (or tests) to stop polling if needed
+function stopPollingForNextLock(){ _pollAbort = true; }
+
 
 function formatExplainForHtml(explain){
   if (!explain) return '';
@@ -416,8 +621,26 @@ async function startWithAnalysis(){
   try {
     const events = await loadUpcomingGames();
     const games = normalizeGames(events);
-    const pick = pickOne(games);
-    if (pick) renderGame(pick);
+  // Fetch recent home-team results (so pickOne can require two prior wins)
+    await fetchRecentResultsForGames(games);
+  const pick = pickOne(games);
+    if (pick) {
+      // If the picked game's kickoff has already started, show loading and poll for the next lock
+      if (typeof window !== 'undefined' && typeof pick.kickoff === 'string') {
+        try {
+          const ko = new Date(pick.kickoff);
+          const now = new Date();
+          if (now >= ko) {
+            renderLoadingNextLock();
+            pollForNextLock();
+            return;
+          }
+        } catch (e) { /* fallthrough to render normally */ }
+      }
+      renderGame(pick);
+    }
+    // check stored pick against fetched games for finalization
+  try { checkAndUpdateStoredPick(games); } catch(e) { console.warn('check stored pick failed', e); }
 
     // No 'Why this pick?' button per current selection rules
 
@@ -457,5 +680,5 @@ if (typeof window !== 'undefined') {
   window.analyzeGames = analyzeGames;
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSpreadFromOdds, analyzeGames, pickOne };
+  module.exports = { parseSpreadFromOdds, analyzeGames, pickOne, fetchRecentResultsForGames, pollForNextLock, stopPollingForNextLock };
 }

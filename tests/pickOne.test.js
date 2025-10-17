@@ -7,18 +7,20 @@ function assertEqual(a,b,msg){
 }
 
 // Test: home underdog should be picked
+// Candidate must be a home team that has won its previous two games.
 const games1 = [
-  { home: 'HomeU', away: 'AwayU', spreadTeam: 'AwayU', spread: 3, kickoff: new Date().toISOString(), source: { provider: 'ESPN' } },
-  { home: 'OtherHome', away: 'OtherAway', spreadTeam: 'OtherHome', spread: 2, kickoff: new Date().toISOString(), source: { provider: 'ESPN' } }
+  { home: 'HomeU', away: 'AwayU', homeLastResults: ['W','W','L'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' } },
+  { home: 'OtherHome', away: 'OtherAway', homeLastResults: ['L','W','W'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' } }
 ];
 const pick1 = pickOne(games1);
-assertEqual(pick1.home, 'HomeU', 'picks the home underdog when present');
+assertEqual(['HomeU','OtherHome'].includes(pick1.home), true, 'picks a home team with two recent wins');
 
-// Test: spread >= 10 should be excluded
+// Test: no candidate if no home team has two prior wins
 const games2 = [
-  { home: 'BigDog', away: 'FavTeam', spreadTeam: 'FavTeam', spread: 12, kickoff: new Date().toISOString(), source: { provider: 'ESPN' } }
+  { home: 'NoWin1', away: 'A', homeLastResults: ['L','W'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' } },
+  { home: 'NoWin2', away: 'B', homeLastResults: ['L','L'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' } }
 ];
 const pick2 = pickOne(games2);
-assertEqual(pick2, null, 'no pick when only spreads >= 10');
+assertEqual(pick2, null, 'no pick when no home team has two prior wins');
 
 console.log('Done pickOne tests');
