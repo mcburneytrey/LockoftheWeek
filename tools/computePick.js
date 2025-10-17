@@ -19,7 +19,14 @@ async function getTeamRecent(teamId){
     const r = await fetch(url, { timeout: 10000 });
     if(!r.ok) return { lastResults: [], consecutiveWins: 0 };
     const j = await r.json();
-    const events = j.events || j.schedule || [];
+    let events = j.events || j.schedule || [];
+    try {
+      events = Array.from(events).sort((a,b)=>{
+        const da = new Date(a?.date || a?.startDate || 0).getTime();
+        const db = new Date(b?.date || b?.startDate || 0).getTime();
+        return db - da;
+      });
+    } catch (e) { /* ignore */ }
     const lastResults = [];
     for (const ev of events){
       try{
@@ -85,6 +92,10 @@ async function getTeamRecent(teamId){
     console.log('Normalized games count:', games.length);
     const candidates = games.filter(g => g.home && g.homeConsecutiveWins >=2);
     console.log('Home teams with >=2 consecutive wins:', candidates.map(c=>({home:c.home,consec:c.homeConsecutiveWins} )));
+    console.log('\n--- DETAILED GAMES ---');
+    for (const g of games){
+      console.log(JSON.stringify({ id: g.id, home: g.home, homeId: g.homeId, homeLastResults: g.homeLastResults, homeConsecutiveWins: g.homeConsecutiveWins, spread: g.spread, spreadTeam: g.spreadTeam, kickoff: g.kickoff, status: g.status }, null, 2));
+    }
     const pick = pickOne(games);
     console.log('Computed pick:', pick || 'No qualifying pick found');
     // Print full candidate details

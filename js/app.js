@@ -348,7 +348,12 @@ function pickOne(games){
     try {
       if (!g || !g.home) return false;
       if (Array.isArray(g.homeLastResults) && g.homeLastResults.length >= 2) {
-        return /^W/i.test(String(g.homeLastResults[0])) && /^W/i.test(String(g.homeLastResults[1]));
+        // If the most recent two are both wins, accept immediately
+        if (/^W/i.test(String(g.homeLastResults[0])) && /^W/i.test(String(g.homeLastResults[1]))) return true;
+        // Otherwise, allow a slightly looser rule: at least 2 wins in the last 3 games
+        const recent3 = g.homeLastResults.slice(0,3);
+        const winsIn3 = recent3.filter(x => /^W/i.test(String(x))).length;
+        if (winsIn3 >= 2) return true;
       }
       if (typeof g.homeConsecutiveWins === 'number') return g.homeConsecutiveWins >= 2;
       const map = (opts.recentWinsMap) ? opts.recentWinsMap : (typeof window !== 'undefined' ? window.recentWinsMap : null);
@@ -360,7 +365,8 @@ function pickOne(games){
   };
 
   const candidates = (games || []).filter(g => {
-    return g && g.home && g.away && hasTwoRecentWins(g, options);
+    // require home team, recent wins, and a numeric spread with a declared favorite (spreadTeam)
+    return g && g.home && g.away && hasTwoRecentWins(g, options) && typeof g.spread === 'number' && g.spreadTeam;
   });
 
   if (!candidates.length) return null;

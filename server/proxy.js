@@ -146,7 +146,15 @@ app.get('/espn/teamRecent', async (req, res) => {
     const data = await upstream.json();
 
     // Extract recent results from schedule.events (most recent first) or data.events
-    const events = data?.events || data?.schedule || [];
+      let events = data?.events || data?.schedule || [];
+      // Ensure we iterate most-recent-first: sort by event date descending if date present
+      try {
+        events = Array.from(events).sort((a,b)=>{
+          const da = new Date(a?.date || a?.startDate || 0).getTime();
+          const db = new Date(b?.date || b?.startDate || 0).getTime();
+          return db - da;
+        });
+      } catch (e) { /* ignore sort errors and use original order */ }
     const lastResults = [];
     for (const ev of events) {
       try {
