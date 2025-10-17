@@ -1,0 +1,26 @@
+name: Export currentPick
+
+on:
+  schedule:
+    - cron: '0 3 * * *' # run daily at 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install deps
+        run: npm ci
+      - name: Run export
+        run: node tools/exportCurrentPick.js
+      - name: Commit generated file
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/currentPick.json || true
+          if git diff --staged --quiet; then echo 'No changes to commit'; else git commit -m "chore: update data/currentPick.json" && git push; fi

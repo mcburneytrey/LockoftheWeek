@@ -1,0 +1,25 @@
+{
+  "id": "401754565",
+  "home": "Clemson Tigers",
+  "away": "SMU Mustangs",
+  "homeId": "228",
+  "awayId": "2567",
+  "spreadTeam": "Clemson Tigers",
+  "spread": 5.5,
+  "kickoff": "2025-10-18T19:30Z",
+  "status": "STATUS_SCHEDULED",
+  "homeScore": 0,
+  "awayScore": 0,
+  "homeLastResults": [
+    "W",
+    "W",
+    "L",
+    "L",
+    "W",
+    "L"
+  ],
+  "homeConsecutiveWins": 2,
+  "source": {
+    "provider": "ESPN BET"
+  }
+}
