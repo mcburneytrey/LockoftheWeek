@@ -466,6 +466,27 @@ function renderGame(g){
     content.innerHTML = `<div class="error">No upcoming college games found. Try again later.</div>`;
     return;
   }
+  // Validate that the game meets the home + two prior wins rule before rendering as the primary pick.
+  function isHomeWithTwoWins(game){
+    try{
+      if (!game || !game.home) return false;
+      if (Array.isArray(game.homeLastResults) && game.homeLastResults.length >= 2) {
+        return /^W/i.test(String(game.homeLastResults[0])) && /^W/i.test(String(game.homeLastResults[1]));
+      }
+      if (typeof game.homeConsecutiveWins === 'number') return game.homeConsecutiveWins >= 2;
+      // fallback: check saved recentWinsMap on window if present
+      if (typeof window !== 'undefined' && window.recentWinsMap && Array.isArray(window.recentWinsMap[game.home]) && window.recentWinsMap[game.home].length >= 2) {
+        return /^W/i.test(String(window.recentWinsMap[game.home][0])) && /^W/i.test(String(window.recentWinsMap[game.home][1]));
+      }
+    } catch (e) { /* ignore */ }
+    return false;
+  }
+
+  // If this game does not meet the home+2-wins requirement, don't render it as the primary lock.
+  if (!isHomeWithTwoWins(g)) {
+    try { renderNoPickFound(); } catch(e) { console.warn('failed to render no-pick', e); }
+    return;
+  }
   // If the favorite is the away team, the home team is the underdog; show the home team as the pick.
   const pickTeam = (g && g.spreadTeam && g.spreadTeam === g.away) ? g.home : (g.spreadTeam || 'Pick');
   const dog = pickTeam === g.home ? g.away : g.home;
@@ -527,6 +548,22 @@ function renderLoadingNextLock(){
   const content = (typeof document !== 'undefined') ? document.getElementById('content') : null;
   if (!content) return;
   content.innerHTML = `<div class="loading">Loading next lock...</div>`;
+}
+
+function renderNoPickFound(){
+  const content = (typeof document !== 'undefined') ? document.getElementById('content') : null;
+  if (!content) return;
+  content.innerHTML = `
+    <div class="no-pick">
+      <div class="title">No qualifying lock found</div>
+      <div class="reason">The selection rule currently requires a home team that has won its previous two games. Either no home team matches that rule for this week, or recent results are not available.</div>
+      <div style="margin-top:12px;"><button id="refreshPick" class="btn">Refresh</button></div>
+    </div>
+  `;
+  const btn = document.getElementById('refreshPick');
+  if (btn) btn.onclick = async () => {
+    try { renderLoadingNextLock(); await startWithAnalysis(); } catch (e) { console.warn('manual refresh failed', e); }
+  };
 }
 
 // Polling loop: re-fetch upcoming games and recent results every 30s until pickOne returns a different pick
@@ -624,7 +661,7 @@ async function startWithAnalysis(){
   // Fetch recent home-team results (so pickOne can require two prior wins)
     await fetchRecentResultsForGames(games);
   const pick = pickOne(games);
-    if (pick) {
+  if (pick) {
       // If the picked game's kickoff has already started, show loading and poll for the next lock
       if (typeof window !== 'undefined' && typeof pick.kickoff === 'string') {
         try {
@@ -639,8 +676,12 @@ async function startWithAnalysis(){
       }
       renderGame(pick);
     }
+    // If no pick was produced, render a helpful message explaining likely reasons and allow manual refresh
+    if (!pick) {
+      try { renderNoPickFound(); } catch (e) { console.warn('renderNoPickFound failed', e); }
+    }
     // check stored pick against fetched games for finalization
-  try { checkAndUpdateStoredPick(games); } catch(e) { console.warn('check stored pick failed', e); }
+    try { checkAndUpdateStoredPick(games); } catch(e) { console.warn('check stored pick failed', e); }
 
     // No 'Why this pick?' button per current selection rules
 
