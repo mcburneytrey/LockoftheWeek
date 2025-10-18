@@ -775,7 +775,23 @@ async function start(){
 async function startWithAnalysis(){
   ensureAnalysisUI();
   try {
-    // First, try to fetch an authoritative server-side pick (so clients display the same deterministic pick)
+    // First, try a static file baked into the site (for GitHub Pages / static hosts)
+    // IMPORTANT: if a static pick exists (data/currentPick.json) render it immediately so the public site shows the official pick.
+    try {
+      const staticR = await fetch('/data/currentPick.json', { cache: 'no-store' });
+      if (staticR.ok) {
+        const staticPick = await staticR.json();
+        if (staticPick && staticPick.id) {
+          // force render and return early
+          renderGame(staticPick);
+          ensureDebugUI();
+          if (typeof renderDebugPanel === 'function') renderDebugPanel([staticPick]);
+          return;
+        }
+      }
+    } catch (e) { console.warn('static currentPick.json fetch failed', e); }
+
+    // Next, try to fetch an authoritative server-side pick (so clients display the same deterministic pick)
     try {
       const r = await fetch('/api/currentPick');
       if (r.ok && r.status !== 204) {
