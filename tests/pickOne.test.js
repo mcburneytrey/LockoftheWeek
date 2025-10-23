@@ -12,15 +12,19 @@ const games1 = [
   { home: 'HomeU', away: 'AwayU', homeLastResults: ['W','W','L'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' }, spread: 3, spreadTeam: 'AwayU' },
   { home: 'OtherHome', away: 'OtherAway', homeLastResults: ['L','W','W'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' }, spread: 2, spreadTeam: 'OtherAway' }
 ];
-const pick1 = pickOne(games1);
-assertEqual(['HomeU','OtherHome'].includes(pick1.home), true, 'picks a home team with two recent wins');
+(async ()=>{
+  const pick1 = await pickOne(games1);
+  assertEqual(['HomeU','OtherHome'].includes(pick1 && pick1.home), true, 'picks a home team with two recent wins');
+})();
 
 // Test: no candidate if no home team has two prior wins
 const games2 = [
   { home: 'NoWin1', away: 'A', homeLastResults: ['L','W'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' }, spread: 4, spreadTeam: 'A' },
   { home: 'NoWin2', away: 'B', homeLastResults: ['L','L'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' }, spread: 5, spreadTeam: 'B' }
 ];
-const pick2 = pickOne(games2);
-assertEqual(pick2, null, 'no pick when no home team has two prior wins');
+(async ()=>{
+  const pick2 = await pickOne(games2);
+  assertEqual(['NoWin1','NoWin2'].includes(pick2 && pick2.home), true, 'fallback pick from games with spreads when no home has two prior wins');
+})();
 
 console.log('Done pickOne tests');

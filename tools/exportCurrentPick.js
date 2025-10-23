@@ -71,7 +71,7 @@ async function getTeamRecent(teamId){
     } catch(e){ /* ignore one-day errors */ }
   }
   console.log('Collected games for week:', games.length);
-  const pick = pickOne(games);
+  const pick = await pickOne(games);
   if (!pick) { console.log('No pick this week.'); process.exit(0); }
   const outDir = path.join(__dirname, '..', 'data');
   try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) {}

@@ -96,7 +96,7 @@ async function getTeamRecent(teamId){
     for (const g of games){
       console.log(JSON.stringify({ id: g.id, home: g.home, homeId: g.homeId, homeLastResults: g.homeLastResults, homeConsecutiveWins: g.homeConsecutiveWins, spread: g.spread, spreadTeam: g.spreadTeam, kickoff: g.kickoff, status: g.status }, null, 2));
     }
-    const pick = pickOne(games);
+  const pick = await pickOne(games);
     console.log('Computed pick:', pick || 'No qualifying pick found');
     // Print full candidate details
     if (pick) console.log('Pick details:', JSON.stringify(pick, null, 2));
