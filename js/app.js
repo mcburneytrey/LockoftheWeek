@@ -420,11 +420,24 @@ async function pickOne(games){
 
     const rng = mulberry32(seed || 12345);
     const idx = Math.floor(rng() * candidates.length);
-    return candidates[idx];
+    const chosen = candidates[idx];
+    if (!chosen) return null;
+    // enforce lock is the home team for the chosen game
+    chosen.pickTeam = chosen.home;
+    // ensure spread is numeric magnitude if present
+    if (typeof chosen.spread === 'number') chosen.spread = Math.abs(chosen.spread);
+    return chosen;
   } catch (e) {
     console.warn('pickOne failed', e);
     return null;
   }
+}
+
+// Helper: compute signed line for the picked team
+function signedLineForPick({ pickTeam, spreadTeam, spread }){
+  if (typeof spread !== 'number') return 'PK';
+  if (!spreadTeam) return 'PK';
+  return (pickTeam === spreadTeam) ? `-${spread}` : `+${spread}`;
 }
 
 /*
@@ -542,21 +555,11 @@ function renderGame(g){
     try { renderNoPickFound(); } catch(e) { console.warn('failed to render no-pick', e); }
     return;
   }
-  // If the favorite is the away team, the home team is the underdog; show the home team as the pick.
-  const pickTeam = (g && g.spreadTeam && g.spreadTeam === g.away) ? g.home : (g.spreadTeam || 'Pick');
-  const dog = pickTeam === g.home ? g.away : g.home;
-  // Determine sign relative to the displayed pickTeam: if pickTeam is the favorite, show '-' (they're favored);
-  // if pickTeam is the underdog, show '+' (they're getting points). g.spread is stored as a positive magnitude.
-  let line = 'PK';
-  if (typeof g.spread === 'number') {
-    const spreadMag = Math.abs(g.spread);
-    const favorite = g.spreadTeam;
-    if (favorite && pickTeam && favorite === pickTeam) {
-      line = `-${spreadMag}`;
-    } else {
-      line = `+${spreadMag}`;
-    }
-  }
+  // pickTeam is explicitly set by pickOne to the home team when available
+  const pickTeam = g.pickTeam || g.home || g.spreadTeam || 'Pick';
+  const opponent = pickTeam === g.home ? g.away : g.home;
+  const dog = opponent;
+  const line = signedLineForPick({ pickTeam, spreadTeam: g.spreadTeam, spread: g.spread });
   content.innerHTML = `
     <div class="teams">
       <div class="teambox away">
@@ -581,7 +584,7 @@ function renderGame(g){
     </div>`;
 
   const share = () => {
-    const text = `Lock of the Week: ${fav} ${line} vs ${dog} — ${fmtKick(g.kickoff)}`;
+    const text = `Lock of the Week: ${pickTeam} ${line} vs ${dog} — ${fmtKick(g.kickoff)}`;
     if(navigator.share){ navigator.share({title:'Lock of the Week', text, url: location.href}).catch(()=>{}); }
     else { navigator.clipboard.writeText(text).then(()=>alert('Copied to clipboard!')).catch(()=>{}); }
   };
@@ -617,40 +620,17 @@ function renderNoPickFound(){
   `;
   const btn = document.getElementById('refreshPick');
   if (btn) btn.onclick = async () => {
-    try { renderLoadingNextLock(); await startWithAnalysis(); } catch (e) { console.warn('manual refresh failed', e); }
+    try { renderLoadingNextLock(); await start(); } catch (e) { console.warn('manual refresh failed', e); }
   };
 }
 
-// Polling loop: re-fetch upcoming games and recent results every 30s until pickOne returns a different pick
-let _pollAbort = false;
-async function pollForNextLock(intervalMs = 30000){
-  _pollAbort = false;
-  const seed = weeklySeed().seed;
-  while (!_pollAbort) {
-    try {
-      const events = await loadUpcomingGames();
-      const games = normalizeGames(events);
-      await fetchRecentResultsForGames(games);
-      const candidate = pickOne(games);
-      if (candidate) {
-        // Stop polling and render the new pick
-        _pollAbort = true;
-        renderGame(candidate);
-        ensureAnalysisUI();
-        return;
-      }
-      // Also check stored pick against any finished games and update record
-      try { checkAndUpdateStoredPick(games); } catch (e) { console.warn('check stored pick failed', e); }
-    } catch (e) {
-      console.warn('pollForNextLock error', e);
-    }
-    // Wait for interval or until aborted
-    await new Promise(r => setTimeout(r, intervalMs));
-  }
+// Polling disabled: replaced with a no-op to prevent manual/auto-polling flows.
+async function pollForNextLock(){
+  // intentionally does nothing; polling flows were removed per user request
+  return;
 }
 
-// Allow other code (or tests) to stop polling if needed
-function stopPollingForNextLock(){ _pollAbort = true; }
+function stopPollingForNextLock(){ /* no-op */ }
 
 
 function formatExplainForHtml(explain){
@@ -670,19 +650,7 @@ function escapeHtml(s){
 }
 
 function ensureAnalysisUI(){
-  // Small, non-interactive indicator that analysis is available.
-  // This creates a subtle badge near the Share button so we can iterate on it later.
-  if (typeof document === 'undefined') return;
-  if (document.getElementById('analysisAvailable')) return;
-  const container = document.querySelector('[style*="justify-content:flex-end"]');
-  if (!container) return;
-  const badge = document.createElement('div');
-  badge.id = 'analysisAvailable';
-  badge.className = 'badge';
-  badge.style.marginLeft = '8px';
-  badge.style.cursor = 'default';
-  badge.textContent = 'ANALYSIS AVAILABLE';
-  container.appendChild(badge);
+  // Analysis UI intentionally disabled per user request.
   return;
 }
 
@@ -801,132 +769,64 @@ function ensureDebugUI(){
 
 // why modal removed per user request
 
+// previous simple start removed; use the single pipeline `start()` defined below.
+
+// Simple start pipeline: fetch upcoming games, filter to home 2-game win streaks,
+// pick deterministically for the week (seeded RNG), and render once.
 async function start(){
+  renderLoadingNextLock();
+  // First try the Netlify function which provides the canonical server-side pick
   try {
-    const events = await loadUpcomingGames();
-    const games = normalizeGames(events);
-    const pick = pickOne(games);
-    if (pick) { renderGame(pick); return; }
-    throw new Error('No games in window');
-  } catch (e){
-    renderGame({
-      home: 'Purdue Boilermakers',
-      away: 'Notre Dame Fighting Irish',
-      spreadTeam: 'Notre Dame Fighting Irish',
-      spread: 6.5,
-      kickoff: new Date().toISOString(),
-      source: { provider: 'Sample Fallback' }
-    });
-  }
-}
-
-// Enhanced start that also requests server-side analysis (non-blocking)
-async function startWithAnalysis(){
-  ensureAnalysisUI();
-  try {
-    // First, try a static file baked into the site (for GitHub Pages / static hosts)
-    // IMPORTANT: if a static pick exists (data/currentPick.json) render it immediately so the public site shows the official pick.
-    try {
-      const staticR = await fetch('/data/currentPick.json', { cache: 'no-store' });
-      if (staticR.ok) {
-        const staticPick = await staticR.json();
-        if (staticPick && staticPick.id) {
-          // force render and return early
-          renderGame(staticPick);
-          ensureDebugUI();
-          if (typeof renderDebugPanel === 'function') renderDebugPanel([staticPick]);
-          return;
-        }
-      }
-    } catch (e) { console.warn('static currentPick.json fetch failed', e); }
-
-    // Next, try to fetch an authoritative server-side pick (so clients display the same deterministic pick)
-    try {
-      const r = await fetch('/api/currentPick');
-      if (r.ok && r.status !== 204) {
-        const serverPick = await r.json();
-        if (serverPick && serverPick.id) {
-          // If the picked game's kickoff has already started, show loading and poll for the next lock
-          if (typeof window !== 'undefined' && typeof serverPick.kickoff === 'string') {
-            try {
-              const ko = new Date(serverPick.kickoff);
-              const now = new Date();
-              if (now >= ko) {
-                renderLoadingNextLock();
-                pollForNextLock();
-                return;
-              }
-            } catch (e) { /* continue to render */ }
-          }
-          renderGame(serverPick);
-          ensureDebugUI();
-          // Also populate debug panel with the single server pick for transparency
-          if (typeof renderDebugPanel === 'function') renderDebugPanel([serverPick]);
-          return;
-        }
-      }
-    } catch (e) {
-      // network/proxy might not be available — continue with local flow
-      console.warn('server currentPick fetch failed, falling back to local', e);
-    }
-
-    const events = await loadUpcomingGames();
-    const games = normalizeGames(events);
-    // Fetch recent home-team results (so pickOne can require two prior wins)
-    await fetchRecentResultsForGames(games);
-    const pick = pickOne(games);
-  if (pick) {
-      // If the picked game's kickoff has already started, show loading and poll for the next lock
-      if (typeof window !== 'undefined' && typeof pick.kickoff === 'string') {
-        try {
-          const ko = new Date(pick.kickoff);
-          const now = new Date();
-          if (now >= ko) {
-            renderLoadingNextLock();
-            pollForNextLock();
-            return;
-          }
-        } catch (e) { /* fallthrough to render normally */ }
-      }
-      renderGame(pick);
-    }
-    // If no pick was produced, render a helpful message explaining likely reasons and allow manual refresh
-    if (!pick) {
-      try { renderNoPickFound(); } catch (e) { console.warn('renderNoPickFound failed', e); }
-    }
-    // check stored pick against fetched games for finalization
-    try { checkAndUpdateStoredPick(games); } catch(e) { console.warn('check stored pick failed', e); }
-
-    // No 'Why this pick?' button per current selection rules
-
-    // Fire-and-forget: ask server-side analyzer for ranked list
-    try {
-      const r = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ games }) });
-      if (r.ok) {
+    const r = await fetch('/.netlify/functions/current-pick', { cache: 'no-store' });
+    if (r.ok) {
+      try {
         const json = await r.json();
-        renderAnalysisPanel(json.list || []);
-      } else {
-        console.warn('Analysis endpoint returned non-OK', r.status);
-      }
-    } catch (e) { console.warn('Failed to fetch analysis', e); }
+        if (json && json.id) { renderGame(json); return; }
+      } catch (e) { console.warn('failed to parse function JSON', e); }
+    } else {
+      console.warn('current-pick function returned non-OK', r.status);
+    }
+  } catch (e) {
+    console.warn('fetch to /.netlify/functions/current-pick failed', e);
+  }
 
+  // If function failed or returned nothing, fall back to client-side selection pipeline
+  try {
+    const events = await loadUpcomingGames();
+    const games = normalizeGames(events);
+
+    let pick = null;
+    try { pick = await pickOne(games); } catch (e) { console.warn('pickOne failed during startup selection', e); pick = null; }
+
+    if (!pick) {
+      // fallback deterministic pick from full pool
+      try {
+        const { seed } = weeklySeed();
+        const pool = Array.isArray(games) ? games.filter(g=>g && g.home && g.away) : [];
+        if (pool.length) {
+          const rng = mulberry32(seed || 12345);
+          const idx = Math.floor(rng() * pool.length);
+          const chosen = pool[idx];
+          if (chosen) { chosen.pickTeam = chosen.home; if (typeof chosen.spread === 'number') chosen.spread = Math.abs(chosen.spread); pick = chosen; }
+        }
+      } catch (e) { console.warn('Fallback selection failed', e); }
+    }
+
+    if (pick) renderGame(pick);
+    else renderNoPickFound();
+
+    try { checkAndUpdateStoredPick(games); } catch (e) { console.warn('check stored pick failed', e); }
     return;
   } catch (e) {
-    renderGame({
-      home: 'Purdue Boilermakers',
-      away: 'Notre Dame Fighting Irish',
-      spreadTeam: 'Notre Dame Fighting Irish',
-      spread: 6.5,
-      kickoff: new Date().toISOString(),
-      source: { provider: 'Sample Fallback' }
-    });
+    console.warn('client-side fallback pipeline failed', e);
+    renderGame({ home: 'Purdue Boilermakers', away: 'Notre Dame Fighting Irish', spreadTeam: 'Notre Dame Fighting Irish', spread: 6.5, kickoff: new Date().toISOString(), source: { provider: 'Sample Fallback' } });
   }
 }
 
 // Only start automatically when running in a browser (not when required by Node for tests)
 // Only start automatically when running in a browser (not when required by Node for tests)
 if (typeof module === 'undefined' || !module.exports) {
-  if (typeof window !== 'undefined') startWithAnalysis();
+  if (typeof window !== 'undefined') start();
 }
 
 // Expose parser for test harnesses and attach to window when available
