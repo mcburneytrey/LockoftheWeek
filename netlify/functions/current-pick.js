@@ -154,18 +154,15 @@ exports.handler = async function handler(event, context){
     const events = await fetchScoreboards();
     const games = normalizeGames(events);
     if (!Array.isArray(games) || !games.length){
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: 'fallback-no-games', home: 'Purdue Boilermakers', away: 'Notre Dame Fighting Irish', homeId: null, awayId: null, spread: 6.5, spreadTeam: 'Notre Dame Fighting Irish', kickoff: new Date().toISOString(), source: { provider: 'fallback' }, pickTeam: 'Purdue Boilermakers' })
-      };
+      const fb = { id: 'fallback-no-games', home: 'Purdue Boilermakers', away: 'Notre Dame Fighting Irish', homeId: null, awayId: null, spread: 6.5, spreadTeam: 'Notre Dame Fighting Irish', kickoff: new Date().toISOString(), source: { provider: 'fallback' }, pickTeam: 'Purdue Boilermakers', meta: { path: 'fallback' } };
+      return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fb) };
     }
 
     // build unique home ids
     const homeIds = Array.from(new Set(games.map(g=>g.homeId).filter(Boolean)));
     const streakMap = new Map();
     await Promise.all(homeIds.map(async id => {
-      try { const ok = await isTwoGameWinStreak(id); streakMap.set(id, ok); } catch(e){ streakMap.set(id, false); }
+      try { const ok = await isTwoGameWinStreak(id); streakMap.set(id, ok); } catch(e){ console.error('team schedule fetch failed for', id, e?.message || e); streakMap.set(id, false); }
     }));
 
     const streakGames = games.filter(g => g && g.homeId && streakMap.get(g.homeId) === true);
@@ -183,16 +180,17 @@ exports.handler = async function handler(event, context){
 
     if (!chosen){
       // fallback pick
-      const fb = { id: 'fallback', home: 'Purdue Boilermakers', away: 'Notre Dame Fighting Irish', homeId: null, awayId: null, spread: 6.5, spreadTeam: 'Notre Dame Fighting Irish', kickoff: new Date().toISOString(), source: { provider: 'fallback' }, pickTeam: 'Purdue Boilermakers' };
+      const fb = { id: 'fallback', home: 'Purdue Boilermakers', away: 'Notre Dame Fighting Irish', homeId: null, awayId: null, spread: 6.5, spreadTeam: 'Notre Dame Fighting Irish', kickoff: new Date().toISOString(), source: { provider: 'fallback' }, pickTeam: 'Purdue Boilermakers', meta: { path: 'fallback' } };
       return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fb) };
     }
 
     // return the chosen pick
-    const resp = { id: chosen.id, home: chosen.home, away: chosen.away, homeId: chosen.homeId, awayId: chosen.awayId, spread: chosen.spread, spreadTeam: chosen.spreadTeam, kickoff: chosen.kickoff, source: chosen.source, pickTeam: chosen.pickTeam };
+    const resp = { id: chosen.id, home: chosen.home, away: chosen.away, homeId: chosen.homeId, awayId: chosen.awayId, spread: chosen.spread, spreadTeam: chosen.spreadTeam, kickoff: chosen.kickoff, source: chosen.source, pickTeam: chosen.pickTeam, meta: { path: (streakGames && streakGames.length) ? 'streak' : 'fallback' } };
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(resp) };
   } catch (e) {
+    console.error('current-pick function failed', e?.message || e);
     // On total failure, return a fallback but still 200 so clients can render
-    const fb = { id: 'fallback-exception', home: 'Purdue Boilermakers', away: 'Notre Dame Fighting Irish', homeId: null, awayId: null, spread: 6.5, spreadTeam: 'Notre Dame Fighting Irish', kickoff: new Date().toISOString(), source: { provider: 'fallback' }, pickTeam: 'Purdue Boilermakers' };
+    const fb = { id: 'fallback-exception', home: 'Purdue Boilermakers', away: 'Notre Dame Fighting Irish', homeId: null, awayId: null, spread: 6.5, spreadTeam: 'Notre Dame Fighting Irish', kickoff: new Date().toISOString(), source: { provider: 'fallback' }, pickTeam: 'Purdue Boilermakers', meta: { path: 'fallback' } };
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fb) };
   }
 };

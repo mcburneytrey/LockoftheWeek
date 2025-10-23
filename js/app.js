@@ -15,6 +15,15 @@ function mulberry32(seed){
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+// Fetch with timeout helper used for serverless function call
+async function fetchWithTimeout(url, { timeoutMs = 6000, ...opts } = {}){
+  const ctl = new AbortController();
+  const id = setTimeout(()=> ctl.abort(), timeoutMs);
+  try{
+    const res = await fetch(url, { signal: ctl.signal, cache: 'no-store', ...opts });
+    return res;
+  } finally { clearTimeout(id); }
+}
 function seasonStartUTC(year){
   const d = new Date(Date.UTC(year, 7, 25));
   while (d.getUTCDay() !== 4) d.setUTCDate(d.getUTCDate() + 1);
@@ -39,6 +48,10 @@ function yyyymmddInCT(offset = 0){
   const m = String(ct.getMonth() + 1).padStart(2, '0');
   const d = String(ct.getDate()).padStart(2, '0');
   return `${y}${m}${d}`;
+}
+// Validate serverless pick shape
+function isValidPick(x){
+  return x && typeof x.home === 'string' && typeof x.away === 'string' && typeof x.pickTeam === 'string' && typeof x.kickoff === 'string';
 }
 function fmtKick(iso){
   try {
@@ -557,6 +570,7 @@ function renderGame(g){
   }
   // pickTeam is explicitly set by pickOne to the home team when available
   const pickTeam = g.pickTeam || g.home || g.spreadTeam || 'Pick';
+  console.log('rendering pick', { id: g.id, path: g.meta?.path || 'client', pickTeam });
   const opponent = pickTeam === g.home ? g.away : g.home;
   const dog = opponent;
   const line = signedLineForPick({ pickTeam, spreadTeam: g.spreadTeam, spread: g.spread });
@@ -781,7 +795,8 @@ async function start(){
     if (r.ok) {
       try {
         const json = await r.json();
-        if (json && json.id) { renderGame(json); return; }
+        if (json && json.id && isValidPick(json)) { console.log('serverless pick', json.meta?.path || 'unknown', json.id); renderGame(json); return; }
+        console.warn('Function returned invalid shape or missing fields:', json);
       } catch (e) { console.warn('failed to parse function JSON', e); }
     } else {
       console.warn('current-pick function returned non-OK', r.status);
@@ -812,8 +827,8 @@ async function start(){
       } catch (e) { console.warn('Fallback selection failed', e); }
     }
 
-    if (pick) renderGame(pick);
-    else renderNoPickFound();
+  if (pick) { console.log('client fallback pick', pick.id || 'unknown'); renderGame(pick); }
+  else renderNoPickFound();
 
     try { checkAndUpdateStoredPick(games); } catch (e) { console.warn('check stored pick failed', e); }
     return;
