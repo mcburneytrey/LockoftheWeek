@@ -1,3 +1,11 @@
+/*
+Single-page “Lock of the Week” for CFB ATS
+Pulls upcoming CFB games (ESPN public scoreboard JSON)
+Finds games where the home team is on a 2-game win streak (last two completed games)
+From that filtered set, picks one deterministically per week (seeded RNG)
+Renders our existing retro UI, with Share button — entertainment only
+*/
+
 // ===== Utilities
 function mulberry32(seed){
   return function(){
@@ -218,6 +226,68 @@ function renderRecord(){
   el.textContent = `Record: ${rec.wins}-${rec.losses}`;
 }
 
+// --------- New helpers: two-game win streak detection and filtering
+const _streakCache = new Map(); // Map<teamId, boolean>
+
+async function isTwoGameWinStreak(teamId){
+  if (!teamId) return false;
+  if (_streakCache.has(teamId)) return _streakCache.get(teamId);
+  try {
+    const url = `https://site.api.espn.com/apis/site/v2/sports/football/college-football/teams/${encodeURIComponent(teamId)}/schedule`;
+    const r = await fetch(url);
+    if (!r.ok) { _streakCache.set(teamId, false); return false; }
+    const j = await r.json();
+    let events = j.events || j.schedule || [];
+    try { events = Array.from(events).sort((a,b)=> new Date(b?.date || b?.startDate || 0) - new Date(a?.date || a?.startDate || 0)); } catch(e){}
+    const completed = [];
+    for (const ev of events){
+      try {
+        const comp = ev.competitions?.[0] || ev.competitions || null; if (!comp) continue;
+        const status = comp?.status || ev?.status || {};
+        const completedFlag = status?.type?.completed === true || status?.type?.name === 'STATUS_FINAL' || status?.type?.completed === true;
+        if (!completedFlag) continue;
+        const competitor = comp.competitors?.find(c => String(c?.team?.id) === String(teamId) || String(c?.team?.teamId) === String(teamId));
+        if (!competitor) continue;
+        // Determine win/loss
+        let isWin = false;
+        if (typeof competitor.winner === 'boolean') isWin = competitor.winner === true;
+        else if (competitor.score != null && comp.competitors) {
+          const other = comp.competitors.find(c=>c !== competitor);
+          if (other && other.score != null) isWin = Number(competitor.score) > Number(other.score);
+        }
+        completed.push(isWin ? 'W' : 'L');
+        if (completed.length >= 2) break;
+      } catch (e) { /* ignore per-event errors */ }
+    }
+    const ok = completed.length >= 2 && /^W/i.test(completed[0]) && /^W/i.test(completed[1]);
+    _streakCache.set(teamId, ok);
+    return ok;
+  } catch (e) {
+    _streakCache.set(teamId, false);
+    return false;
+  }
+}
+
+async function filterHomeTeamsOnStreak(games){
+  if (!Array.isArray(games) || !games.length) return [];
+  // collect unique home team ids
+  const ids = Array.from(new Set(games.map(g=>g && g.homeId).filter(Boolean)));
+  const concurrency = 6;
+  const results = new Map();
+  // process in batches
+  for (let i=0; i<ids.length; i+=concurrency){
+    const batch = ids.slice(i, i+concurrency);
+    const settled = await Promise.allSettled(batch.map(id => isTwoGameWinStreak(id)));
+    for (let j=0;j<batch.length;j++){
+      const id = batch[j];
+      const res = settled[j];
+      results.set(id, (res.status === 'fulfilled' && res.value === true));
+    }
+  }
+  // filter games
+  return games.filter(g => g && g.homeId && results.get(g.homeId) === true);
+}
+
 function loadLastPick(){
   try{ if (typeof localStorage === 'undefined') return null; const raw = localStorage.getItem('lotw_lastPick'); return raw ? JSON.parse(raw) : null; } catch(e){ return null; }
 }
@@ -331,51 +401,30 @@ async function fetchRecentResultsForGames(games){
   return games;
 }
 
-function pickOne(games){
+async function pickOne(games){
   const {seed, wk} = weeklySeed();
   if (typeof document !== 'undefined') {
     const weekLabelEl = document.getElementById('weekLabel');
     if (weekLabelEl) weekLabelEl.textContent = `WEEK ${wk} PICK`;
   }
-  // New rule: pick a team that is the home team and has won its previous two games.
-  // We accept one of several ways to provide recent results for the home team:
-  //  - game.homeLastResults: an array like ['W','W',...], most-recent-first
-  //  - game.homeConsecutiveWins: a number representing how many straight wins the home team has
-  //  - options.recentWinsMap (deprecated-per-call): caller may pass a map via global/window later
-  const options = {};
 
-  const hasTwoRecentWins = (g, opts = {}) => {
-    try {
-      if (!g || !g.home) return false;
-      if (Array.isArray(g.homeLastResults) && g.homeLastResults.length >= 2) {
-        // If the most recent two are both wins, accept immediately
-        if (/^W/i.test(String(g.homeLastResults[0])) && /^W/i.test(String(g.homeLastResults[1]))) return true;
-        // Otherwise, allow a slightly looser rule: at least 2 wins in the last 3 games
-        const recent3 = g.homeLastResults.slice(0,3);
-        const winsIn3 = recent3.filter(x => /^W/i.test(String(x))).length;
-        if (winsIn3 >= 2) return true;
-      }
-      if (typeof g.homeConsecutiveWins === 'number') return g.homeConsecutiveWins >= 2;
-      const map = (opts.recentWinsMap) ? opts.recentWinsMap : (typeof window !== 'undefined' ? window.recentWinsMap : null);
-      if (map && Array.isArray(map[g.home]) && map[g.home].length >= 2) {
-        return /^W/i.test(String(map[g.home][0])) && /^W/i.test(String(map[g.home][1]));
-      }
-    } catch (e) { /* fallthrough */ }
-    return false;
-  };
+  try {
+    // Ensure we have normalized games array
+    const pool = Array.isArray(games) ? games.slice() : [];
+    // Filter to home teams with 2-game win streaks
+    let streakGames = [];
+    try { streakGames = await filterHomeTeamsOnStreak(pool); } catch (e) { console.warn('streak filter failed', e); }
 
-  const candidates = (games || []).filter(g => {
-    // require home team, recent wins, and a numeric spread with a declared favorite (spreadTeam)
-    return g && g.home && g.away && hasTwoRecentWins(g, options) && typeof g.spread === 'number' && g.spreadTeam;
-  });
+    const candidates = (streakGames && streakGames.length) ? streakGames : pool.filter(g => g && g.home && g.away);
+    if (!candidates || !candidates.length) return null;
 
-  if (!candidates.length) return null;
-
-  // From the remaining candidates, choose one speculatively. Use a deterministic weekly RNG so picks
-  // are reproducible for the week but still allow a degree of 'speculation'.
-  const rng = mulberry32(seed || 12345);
-  const idx = Math.floor(rng() * candidates.length);
-  return candidates[idx];
+    const rng = mulberry32(seed || 12345);
+    const idx = Math.floor(rng() * candidates.length);
+    return candidates[idx];
+  } catch (e) {
+    console.warn('pickOne failed', e);
+    return null;
+  }
 }
 
 /*

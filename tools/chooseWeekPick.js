@@ -74,7 +74,7 @@ async function getTeamRecent(teamId){
   }
   console.log('Collected games for week:', games.length);
   // Call pickOne to produce deterministic pick
-  const pick = pickOne(games);
+  const pick = await pickOne(games);
   if (!pick) console.log('pickOne returned no qualifying pick this week');
   else console.log('Deterministic weekly pick:', JSON.stringify(pick, null, 2));
 })();

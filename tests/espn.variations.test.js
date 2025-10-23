@@ -27,7 +27,9 @@ const games = [
   { home: 'H1', away: 'A1', spreadTeam: 'A1', spread: 4, kickoff: new Date().toISOString(), source: { provider: 'ESPN' } },
   { home: 'H2', away: 'A2', spreadTeam: 'H2', spread: 2, kickoff: new Date().toISOString(), source: { provider: 'ESPN' } }
 ];
-const p = pickOne(games);
-assertEqual(p.home, 'H1', 'pickOne prefers home underdog H1');
+(async ()=>{
+  const p = await pickOne(games);
+  assertEqual(p && p.home, 'H1', 'pickOne prefers home underdog H1');
+})();
 
 console.log('Done ESPN variations tests');
