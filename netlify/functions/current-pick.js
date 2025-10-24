@@ -38,6 +38,19 @@ function yyyymmddInCT(offset = 0){
   return `${y}${m}${d}`;
 }
 
+function withinDays(kickoffIso, days = 3){
+  try{
+    const ko = new Date(kickoffIso);
+    const now = new Date();
+    const diffDays = (ko - now) / 86400000;
+    return diffDays >= 0 && diffDays <= days;
+  } catch(e){ return false; }
+}
+
+function weekOfKickoff(kickoffIso){
+  try{ return getCfbWeek(new Date(kickoffIso)); } catch(e){ return null; }
+}
+
 function extractNum(v){
   if (v == null) return undefined;
   if (typeof v === 'number') return v;
@@ -166,7 +179,13 @@ exports.handler = async function handler(event, context){
     }));
 
     const streakGames = games.filter(g => g && g.homeId && streakMap.get(g.homeId) === true);
-    const pool = (streakGames && streakGames.length) ? streakGames : games.filter(g=>g && g.home && g.away);
+    let pool = (streakGames && streakGames.length) ? streakGames : games.filter(g=>g && g.home && g.away);
+    // Prefer games in the current CFB week. If any exist, narrow pool to them.
+    try{
+      const wkNow = weeklySeed().wk;
+      const preferred = pool.filter(g => weekOfKickoff(g.kickoff) === wkNow);
+      if (preferred && preferred.length) pool = preferred;
+    } catch(e){}
     const { seed } = weeklySeed();
     const rng = mulberry32(seed || 12345);
     let chosen = null;
@@ -185,7 +204,8 @@ exports.handler = async function handler(event, context){
     }
 
     // return the chosen pick
-    const resp = { id: chosen.id, home: chosen.home, away: chosen.away, homeId: chosen.homeId, awayId: chosen.awayId, spread: chosen.spread, spreadTeam: chosen.spreadTeam, kickoff: chosen.kickoff, source: chosen.source, pickTeam: chosen.pickTeam, meta: { path: (streakGames && streakGames.length) ? 'streak' : 'fallback' } };
+  const usedPreferred = (Array.isArray(pool) && pool.length && pool.every(p=>weekOfKickoff(p.kickoff) === weeklySeed().wk));
+  const resp = { id: chosen.id, home: chosen.home, away: chosen.away, homeId: chosen.homeId, awayId: chosen.awayId, spread: chosen.spread, spreadTeam: chosen.spreadTeam, kickoff: chosen.kickoff, source: chosen.source, pickTeam: chosen.pickTeam, meta: { path: usedPreferred ? 'week' : ((streakGames && streakGames.length) ? 'streak' : 'fallback') } };
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(resp) };
   } catch (e) {
     console.error('current-pick function failed', e?.message || e);

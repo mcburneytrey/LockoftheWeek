@@ -15,6 +15,15 @@ function mulberry32(seed){
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+// Helper: check if kickoff ISO is within N days from now (inclusive)
+function withinDays(kickoffIso, days = 3){
+  try{
+    const ko = new Date(kickoffIso);
+    const now = new Date();
+    const diffDays = (ko - now) / 86400000;
+    return diffDays >= 0 && diffDays <= days;
+  } catch (e){ return false; }
+}
 // Fetch with timeout helper used for serverless function call
 async function fetchWithTimeout(url, { timeoutMs = 6000, ...opts } = {}){
   const ctl = new AbortController();
@@ -428,7 +437,15 @@ async function pickOne(games){
     let streakGames = [];
     try { streakGames = await filterHomeTeamsOnStreak(pool); } catch (e) { console.warn('streak filter failed', e); }
 
-    const candidates = (streakGames && streakGames.length) ? streakGames : pool.filter(g => g && g.home && g.away);
+    let candidates = (streakGames && streakGames.length) ? streakGames : pool.filter(g => g && g.home && g.away);
+    // Prefer games in the current CFB week. If none, fall back to full candidates.
+    try{
+      const wkNow = weeklySeed().wk;
+      const preferred = candidates.filter(g => {
+        try { return getCfbWeek(new Date(g.kickoff)) === wkNow; } catch(e){ return false; }
+      });
+      if (preferred && preferred.length) candidates = preferred;
+    } catch(e){}
     if (!candidates || !candidates.length) return null;
 
     const rng = mulberry32(seed || 12345);
