@@ -51,6 +51,14 @@ function weekOfKickoff(kickoffIso){
   try{ return getCfbWeek(new Date(kickoffIso)); } catch(e){ return null; }
 }
 
+function isSaturdayInCT(kickoffIso){
+  try{
+    const d = new Date(kickoffIso);
+    const ct = new Date(d.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    return ct.getDay() === 6; // Saturday
+  } catch(e){ return false; }
+}
+
 function extractNum(v){
   if (v == null) return undefined;
   if (typeof v === 'number') return v;
@@ -185,6 +193,9 @@ exports.handler = async function handler(event, context){
       const wkNow = weeklySeed().wk;
       const preferred = pool.filter(g => weekOfKickoff(g.kickoff) === wkNow);
       if (preferred && preferred.length) pool = preferred;
+      // Now prefer Saturday games only
+      const saturday = pool.filter(g => isSaturdayInCT(g.kickoff));
+      if (saturday && saturday.length) pool = saturday;
     } catch(e){}
     const { seed } = weeklySeed();
     const rng = mulberry32(seed || 12345);
@@ -205,7 +216,8 @@ exports.handler = async function handler(event, context){
 
     // return the chosen pick
   const usedPreferred = (Array.isArray(pool) && pool.length && pool.every(p=>weekOfKickoff(p.kickoff) === weeklySeed().wk));
-  const resp = { id: chosen.id, home: chosen.home, away: chosen.away, homeId: chosen.homeId, awayId: chosen.awayId, spread: chosen.spread, spreadTeam: chosen.spreadTeam, kickoff: chosen.kickoff, source: chosen.source, pickTeam: chosen.pickTeam, meta: { path: usedPreferred ? 'week' : ((streakGames && streakGames.length) ? 'streak' : 'fallback') } };
+  const usedSaturday = (Array.isArray(pool) && pool.length && pool.every(p=>isSaturdayInCT(p.kickoff)));
+  const resp = { id: chosen.id, home: chosen.home, away: chosen.away, homeId: chosen.homeId, awayId: chosen.awayId, spread: chosen.spread, spreadTeam: chosen.spreadTeam, kickoff: chosen.kickoff, source: chosen.source, pickTeam: chosen.pickTeam, meta: { path: usedSaturday ? 'saturday' : (usedPreferred ? 'week' : ((streakGames && streakGames.length) ? 'streak' : 'fallback')) } };
     return { statusCode: 200, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(resp) };
   } catch (e) {
     console.error('current-pick function failed', e?.message || e);

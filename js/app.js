@@ -24,6 +24,14 @@ function withinDays(kickoffIso, days = 3){
     return diffDays >= 0 && diffDays <= days;
   } catch (e){ return false; }
 }
+
+function isSaturdayInCT(kickoffIso){
+  try{
+    const d = new Date(kickoffIso);
+    const ct = new Date(d.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    return ct.getDay() === 6; // Saturday
+  } catch(e){ return false; }
+}
 // Fetch with timeout helper used for serverless function call
 async function fetchWithTimeout(url, { timeoutMs = 6000, ...opts } = {}){
   const ctl = new AbortController();
@@ -217,6 +225,14 @@ function normalizeGames(events){
     const gid = ev?.id || comp?.id || `${home}-${away}-${dateISO}`;
     out.push({id: gid, home,away,homeId,awayId,spreadTeam,spread,kickoff: dateISO, status, homeScore, awayScore, source:{provider: odds?.provider?.name || 'ESPN'}});
   }
+  // Stable sort by kickoff then home name so client and server see the same ordering
+  out.sort((a,b)=>{
+    try {
+      if (a.kickoff && b.kickoff && a.kickoff !== b.kickoff) return new Date(a.kickoff) - new Date(b.kickoff);
+    } catch(e){}
+    if (a.home && b.home) return a.home.localeCompare(b.home);
+    return 0;
+  });
   return out;
 }
 
@@ -438,13 +454,14 @@ async function pickOne(games){
     try { streakGames = await filterHomeTeamsOnStreak(pool); } catch (e) { console.warn('streak filter failed', e); }
 
     let candidates = (streakGames && streakGames.length) ? streakGames : pool.filter(g => g && g.home && g.away);
-    // Prefer games in the current CFB week. If none, fall back to full candidates.
+    // Prefer games in the current CFB week. Then prefer Saturday games only. If none, fall back to full candidates.
     try{
       const wkNow = weeklySeed().wk;
-      const preferred = candidates.filter(g => {
-        try { return getCfbWeek(new Date(g.kickoff)) === wkNow; } catch(e){ return false; }
-      });
-      if (preferred && preferred.length) candidates = preferred;
+      const weekPreferred = candidates.filter(g => { try { return getCfbWeek(new Date(g.kickoff)) === wkNow; } catch(e){ return false; } });
+      if (weekPreferred && weekPreferred.length) candidates = weekPreferred;
+      // Now narrow to Saturday games only
+      const saturday = candidates.filter(g => isSaturdayInCT(g.kickoff));
+      if (saturday && saturday.length) candidates = saturday;
     } catch(e){}
     if (!candidates || !candidates.length) return null;
 
