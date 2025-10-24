@@ -1100,5 +1100,16 @@ if (typeof window !== 'undefined') {
   window.analyzeGames = analyzeGames;
 }
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { parseSpreadFromOdds, analyzeGames, pickOne, fetchRecentResultsForGames, pollForNextLock, stopPollingForNextLock };
+  module.exports = {
+    parseSpreadFromOdds,
+    analyzeGames,
+    pickOne,
+    fetchRecentResultsForGames,
+    pollForNextLock,
+    stopPollingForNextLock,
+    // Export helpers for tests/debug
+    extractFavoriteAndSpread,
+    signedLineForPick,
+    normalizeGames
+  };
 }
