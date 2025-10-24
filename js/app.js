@@ -483,7 +483,8 @@ async function pickOne(games){
 // Helper: compute signed line for the picked team
 function signedLineForPick({ pickTeam, spreadTeam, spread }){
   if (typeof spread !== 'number') return 'PK';
-  if (!spreadTeam) return 'PK';
+  // If we don't know which team the spread applies to, still show the magnitude
+  if (!spreadTeam) return String(spread);
   return (pickTeam === spreadTeam) ? `-${spread}` : `+${spread}`;
 }
 
