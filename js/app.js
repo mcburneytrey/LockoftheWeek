@@ -241,10 +241,12 @@ function normalizeGames(events){
     const competitors = comp.competitors||[];
     const homeComp = competitors.find(c=>c.homeAway==='home');
     const awayComp = competitors.find(c=>c.homeAway==='away');
-    const home = homeComp?.team?.displayName;
-    const away = awayComp?.team?.displayName;
+  const home = homeComp?.team?.displayName;
+  const away = awayComp?.team?.displayName;
     const homeId = homeComp?.team?.id || homeComp?.team?.teamId || undefined;
     const awayId = awayComp?.team?.id || awayComp?.team?.teamId || undefined;
+  const homeAbbrev = (homeComp?.team?.abbreviation || homeComp?.team?.shortDisplayName || '').toString();
+  const awayAbbrev = (awayComp?.team?.abbreviation || awayComp?.team?.shortDisplayName || '').toString();
     if(!home||!away) continue;
   const odds = (comp.odds && comp.odds[0]) || null;
   const {spreadTeam, spread} = parseSpreadFromOdds(odds, home, away);
@@ -258,8 +260,19 @@ function normalizeGames(events){
     if (!favoriteTeamId && typeof spreadTeam === 'string'){
       try{
         const stn = norm(spreadTeam);
-        if (stn && home && norm(home) === stn) favoriteTeamId = homeId;
-        else if (stn && away && norm(away) === stn) favoriteTeamId = awayId;
+  const homeN = norm(home || '');
+  const awayN = norm(away || '');
+  const homeA = norm(homeAbbrev || '');
+  const awayA = norm(awayAbbrev || '');
+  const tokens = str => (String(str||'').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
+        const tokenMatch = (a,b) => {
+          const A = tokens(a);
+          const B = tokens(b);
+          if (!A.length || !B.length) return false;
+          return A.some(x => B.some(y => x && y && (x === y || x.includes(y) || y.includes(x))));
+        };
+  if (stn && (homeN === stn || tokenMatch(stn, homeN) || tokenMatch(homeN, stn) || homeA === stn || tokenMatch(stn, homeA))) favoriteTeamId = homeId;
+  else if (stn && (awayN === stn || tokenMatch(stn, awayN) || tokenMatch(awayN, stn) || awayA === stn || tokenMatch(stn, awayA))) favoriteTeamId = awayId;
         else if (spreadTeam === home) favoriteTeamId = homeId;
         else if (spreadTeam === away) favoriteTeamId = awayId;
       } catch(e){}
@@ -300,6 +313,9 @@ function normalizeGames(events){
   });
   return out;
 }
+
+// Expose last normalized games for debugging in browser console
+if (typeof window !== 'undefined') window.lastNormalizedGames = null;
 
 // --- Record helpers persisted in localStorage under 'lotw_record' and last pick under 'lotw_lastPick'
 function loadRecord(){
@@ -940,9 +956,19 @@ async function start(){
   // If function failed or returned nothing, fall back to client-side selection pipeline
   try {
     const events = await loadUpcomingGames();
-    const games = normalizeGames(events);
+    let games = normalizeGames(events);
+    // If no events were returned (CORS/local dev), provide a small in-browser fallback so the UI doesn't stay stuck on loading.
+    if ((!Array.isArray(games) || games.length === 0) && typeof window !== 'undefined'){
+      console.warn('No events fetched from ESPN; using local fallback sample games for UI.');
+      const now = new Date();
+      const sampleKick = new Date(now.getTime() + 24*3600*1000).toISOString();
+      games = [
+        { id: 'fb-fallback-1', home: 'Sample Home', away: 'Sample Away', homeId: 'H1', awayId: 'A1', spreadTeam: 'Sample Home', spread: 7, spreadAbs: 7, favoriteTeamId: 'H1', kickoff: sampleKick, source: { provider: 'Fallback' }, homeLastResults: ['W','W'] },
+        { id: 'fb-fallback-2', home: 'Georgia Tech', away: 'Opponent', homeId: 'GT', awayId: 'OP', spreadTeam: 'Georgia Tech', spread: 3.5, spreadAbs: 3.5, favoriteTeamId: 'GT', kickoff: sampleKick, source: { provider: 'Fallback' }, homeLastResults: ['W','W'] }
+      ];
+    }
 
-    let pick = null;
+  let pick = null;
     try { pick = await pickOne(games); } catch (e) { console.warn('pickOne failed during startup selection', e); pick = null; }
 
       if (!pick) {
