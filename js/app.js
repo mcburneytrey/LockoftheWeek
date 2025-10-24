@@ -80,6 +80,38 @@ function fmtKick(iso){
 }
 const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// Robust odds extractor. Returns { favoriteTeamId, spreadAbs, provider } or null
+function extractFavoriteAndSpread(comp, homeName, awayName, homeId, awayId){
+  const odds = comp && Array.isArray(comp.odds) && comp.odds[0] ? comp.odds[0] : null;
+  if (!odds) return null;
+  const provider = odds.provider?.name || 'ESPN';
+  const h = odds.homeTeamOdds || {};
+  const a = odds.awayTeamOdds || {};
+  if (typeof h.spread === 'number' && typeof a.spread === 'number'){
+    if (h.spread < 0) return { favoriteTeamId: homeId, spreadAbs: Math.abs(h.spread), provider };
+    if (a.spread < 0) return { favoriteTeamId: awayId, spreadAbs: Math.abs(a.spread), provider };
+  } else {
+    if (typeof h.spread === 'number' && h.spread < 0) return { favoriteTeamId: homeId, spreadAbs: Math.abs(h.spread), provider };
+    if (typeof a.spread === 'number' && a.spread < 0) return { favoriteTeamId: awayId, spreadAbs: Math.abs(a.spread), provider };
+  }
+  const details = typeof odds.details === 'string' ? odds.details.trim() : '';
+  if (details){
+    const m = details.match(/^(.+?)\s+([+-]?\d+(?:\.\d+)?)$/);
+    if (m){
+      const teamStr = m[1].trim();
+      const signed = parseFloat(m[2]);
+      if (!Number.isNaN(signed)){
+        const teamN = norm(teamStr), homeN = norm(homeName), awayN = norm(awayName);
+        let favId = null;
+        if (teamN.includes(homeN) || homeN.includes(teamN)) favId = homeId;
+        else if (teamN.includes(awayN) || awayN.includes(teamN)) favId = awayId;
+        if (favId !== null) return { favoriteTeamId: favId, spreadAbs: Math.abs(signed), provider };
+      }
+    }
+  }
+  return null;
+}
+
 // ===== parseSpreadFromOdds (replacement)
 function parseSpreadFromOdds(odds, home, away) {
   // Test cases:
@@ -214,8 +246,9 @@ function normalizeGames(events){
     const homeId = homeComp?.team?.id || homeComp?.team?.teamId || undefined;
     const awayId = awayComp?.team?.id || awayComp?.team?.teamId || undefined;
     if(!home||!away) continue;
-    const odds = (comp.odds && comp.odds[0]) || null;
-    const {spreadTeam, spread} = parseSpreadFromOdds(odds, home, away);
+  const odds = (comp.odds && comp.odds[0]) || null;
+  const {spreadTeam, spread} = parseSpreadFromOdds(odds, home, away);
+  const fav = extractFavoriteAndSpread(comp, home, away, homeId, awayId);
     // extract scores and status
     const homeCompData = competitors.find(c=>c.homeAway==='home') || {};
     const awayCompData = competitors.find(c=>c.homeAway==='away') || {};
@@ -223,7 +256,7 @@ function normalizeGames(events){
     const awayScore = awayCompData?.score != null ? Number(awayCompData.score) : undefined;
     const status = comp?.status?.type?.name || ev?.status?.type?.name || undefined;
     const gid = ev?.id || comp?.id || `${home}-${away}-${dateISO}`;
-    out.push({id: gid, home,away,homeId,awayId,spreadTeam,spread,kickoff: dateISO, status, homeScore, awayScore, source:{provider: odds?.provider?.name || 'ESPN'}});
+  out.push({id: gid, home,away,homeId,awayId,spreadTeam,spread,kickoff: dateISO, status, homeScore, awayScore, favoriteTeamId: fav?.favoriteTeamId, spreadAbs: fav?.spreadAbs, source:{provider: fav?.provider || odds?.provider?.name || 'ESPN'}});
   }
   // Stable sort by kickoff then home name so client and server see the same ordering
   out.sort((a,b)=>{
@@ -349,22 +382,21 @@ function evaluatePickAgainstSpread(pick, game){
     const awayScore = typeof game.awayScore === 'number' ? game.awayScore : (game.awayScore ? Number(game.awayScore) : undefined);
     if (homeScore == null || awayScore == null) return null;
     const pickedHome = pick.pickTeam === game.home || pick.pickTeam === pick.home;
-    const s = typeof game.spread === 'number' ? game.spread : undefined;
-    if (s == null) return null; // cannot evaluate without spread
-    // Determine ATS values
+    // Prefer canonical favoriteTeamId/spreadAbs when available
+    const favId = game.favoriteTeamId || game.spreadTeam || undefined;
+    const s = typeof game.spreadAbs === 'number' ? game.spreadAbs : (typeof game.spread === 'number' ? game.spread : undefined);
+    if (s == null || !favId) return null; // cannot evaluate without spread and favorite
+    // Determine ATS values (homeATS is home score adjusted for spread)
     let homeATS = homeScore;
     let awayATS = awayScore;
-    // If favorite is home (spreadTeam === home), home gives points
-    if (game.spreadTeam === game.home) {
+    if (String(favId) === String(game.homeId)) {
       homeATS = homeScore - s;
-    } else if (game.spreadTeam === game.away) {
-      homeATS = homeScore + s;
-    }
-    // awayATS for symmetry
-    if (game.spreadTeam === game.away) {
-      awayATS = awayScore - s;
-    } else if (game.spreadTeam === game.home) {
       awayATS = awayScore + s;
+    } else if (String(favId) === String(game.awayId)) {
+      homeATS = homeScore + s;
+      awayATS = awayScore - s;
+    } else {
+      return null;
     }
 
     // If pick is home, compare homeATS vs awayATS
@@ -462,6 +494,11 @@ async function pickOne(games){
       // Now narrow to Saturday games only
       const saturday = candidates.filter(g => isSaturdayInCT(g.kickoff));
       if (saturday && saturday.length) candidates = saturday;
+      // Prefer games that have a numeric spread (either extracted spreadAbs or legacy spread)
+      try {
+        const withSpread = candidates.filter(g => (g && (typeof g.spreadAbs === 'number' || typeof g.spread === 'number')));
+        if (withSpread && withSpread.length) candidates = withSpread;
+      } catch(e){}
     } catch(e){}
     if (!candidates || !candidates.length) return null;
 
@@ -480,12 +517,10 @@ async function pickOne(games){
   }
 }
 
-// Helper: compute signed line for the picked team
-function signedLineForPick({ pickTeam, spreadTeam, spread }){
-  if (typeof spread !== 'number') return 'PK';
-  // If we don't know which team the spread applies to, still show the magnitude
-  if (!spreadTeam) return String(spread);
-  return (pickTeam === spreadTeam) ? `-${spread}` : `+${spread}`;
+// Signed line relative to the picked team using ids
+function signedLineForPick({ pickTeamId, favoriteTeamId, spreadAbs }){
+  if (typeof spreadAbs !== 'number' || !favoriteTeamId) return 'PK';
+  return pickTeamId === String(favoriteTeamId) || pickTeamId === favoriteTeamId ? `-${spreadAbs}` : `+${spreadAbs}`;
 }
 
 /*
@@ -612,7 +647,10 @@ function renderGame(g){
   console.log('rendering pick', { id: g.id, path: g.meta?.path || 'client', pickTeam });
   const opponent = pickTeam === g.home ? g.away : g.home;
   const dog = opponent;
-  const line = signedLineForPick({ pickTeam, spreadTeam: g.spreadTeam, spread: g.spread });
+  const pickTeamId = (pickTeam === g.home) ? g.homeId : g.awayId;
+  const favoriteTeamId = g.favoriteTeamId || g.spreadTeam || undefined;
+  const spreadAbs = typeof g.spreadAbs === 'number' ? g.spreadAbs : (typeof g.spread === 'number' ? g.spread : undefined);
+  const line = signedLineForPick({ pickTeamId, favoriteTeamId, spreadAbs });
   content.innerHTML = `
     <div class="teams">
       <div class="teambox away">
@@ -637,7 +675,8 @@ function renderGame(g){
     </div>`;
 
   const share = () => {
-    const text = `Lock of the Week: ${pickTeam} ${line} vs ${dog} — ${fmtKick(g.kickoff)}`;
+    const signedForShare = signedLineForPick({ pickTeamId, favoriteTeamId, spreadAbs });
+    const text = `Lock of the Week: ${pickTeam} ${signedForShare} vs ${dog} — ${fmtKick(g.kickoff)}`;
     if(navigator.share){ navigator.share({title:'Lock of the Week', text, url: location.href}).catch(()=>{}); }
     else { navigator.clipboard.writeText(text).then(()=>alert('Copied to clipboard!')).catch(()=>{}); }
   };

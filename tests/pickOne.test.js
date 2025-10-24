@@ -27,4 +27,15 @@ const games2 = [
   assertEqual(['NoWin1','NoWin2'].includes(pick2 && pick2.home), true, 'fallback pick from games with spreads when no home has two prior wins');
 })();
 
+// Mini-test: when both candidates exist, prefer a game that has a numeric spread
+const games3 = [
+  { home: 'HomeA', away: 'AwayA', homeLastResults: ['W','W'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' }, spread: undefined, spreadTeam: undefined },
+  { home: 'HomeB', away: 'AwayB', homeLastResults: ['W','W'], kickoff: new Date().toISOString(), source: { provider: 'ESPN' }, spread: 4, spreadTeam: 'HomeB' }
+];
+(async ()=>{
+  const pick3 = await pickOne(games3);
+  const pickedHasSpread = pick3 && (typeof pick3.spread === 'number' || typeof pick3.spreadAbs === 'number');
+  assertEqual(pickedHasSpread, true, 'prefers a home game that has a numeric spread when available');
+})();
+
 console.log('Done pickOne tests');
