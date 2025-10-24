@@ -15,6 +15,23 @@ function mulberry32(seed){
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+// Debug flag from URL
+const DEBUG = (typeof location !== 'undefined') && new URLSearchParams(location.search).has('debug');
+
+function setStatus(label){
+  try{
+    if (!DEBUG) return;
+    let el = document.getElementById('debugStatus');
+    if (!el){
+      el = document.createElement('div');
+      el.id = 'debugStatus';
+      el.style.cssText = "position:fixed;top:8px;right:8px;background:#111827;color:#cbd5e1;border:1px solid #374151;padding:6px 8px;border-radius:8px;font:11px ui-monospace,Menlo,monospace;z-index:99999;opacity:.95";
+      document.body.appendChild(el);
+    }
+    const now = new Date().toLocaleTimeString('en-US',{timeZone:'America/Chicago',hour:'numeric',minute:'2-digit'});
+    el.textContent = `${label} • ${now}`;
+  } catch(e) { /* ignore */ }
+}
 // Helper: check if kickoff ISO is within N days from now (inclusive)
 function withinDays(kickoffIso, days = 3){
   try{
@@ -82,33 +99,82 @@ const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // Robust odds extractor. Returns { favoriteTeamId, spreadAbs, provider } or null
 function extractFavoriteAndSpread(comp, homeName, awayName, homeId, awayId){
+  // Helper normalizers
+  const provider = (comp && comp.odds && comp.odds[0] && (comp.odds[0].provider?.name || comp.odds[0].bookmaker)) || 'ESPN';
   const odds = comp && Array.isArray(comp.odds) && comp.odds[0] ? comp.odds[0] : null;
-  if (!odds) return null;
-  const provider = odds.provider?.name || 'ESPN';
-  const h = odds.homeTeamOdds || {};
-  const a = odds.awayTeamOdds || {};
-  if (typeof h.spread === 'number' && typeof a.spread === 'number'){
-    if (h.spread < 0) return { favoriteTeamId: homeId, spreadAbs: Math.abs(h.spread), provider };
-    if (a.spread < 0) return { favoriteTeamId: awayId, spreadAbs: Math.abs(a.spread), provider };
-  } else {
-    if (typeof h.spread === 'number' && h.spread < 0) return { favoriteTeamId: homeId, spreadAbs: Math.abs(h.spread), provider };
-    if (typeof a.spread === 'number' && a.spread < 0) return { favoriteTeamId: awayId, spreadAbs: Math.abs(a.spread), provider };
+  const toTokens = s => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g,' ').split(/\s+/).filter(Boolean);
+  const matchByTokens = (needle, hay) => {
+    if (!needle || !hay) return false;
+    const A = toTokens(needle);
+    const B = toTokens(hay);
+    return A.some(a => B.some(b => a === b || a.includes(b) || b.includes(a)));
+  };
+
+  // 1) Per-team numeric spreads are the most reliable
+  if (odds) {
+    const h = odds.homeTeamOdds || {};
+    const a = odds.awayTeamOdds || {};
+    const tryNum = v => {
+      if (v == null) return undefined;
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string') {
+        const n = parseFloat(v.replace(/[^0-9\.\-+]/g,''));
+        return Number.isNaN(n) ? undefined : n;
+      }
+      return undefined;
+    };
+    const hv = tryNum(h.spread ?? h.pointSpread ?? h.handicap ?? h.line);
+    const av = tryNum(a.spread ?? a.pointSpread ?? a.handicap ?? a.line);
+    if (typeof hv === 'number' && typeof av === 'number'){
+      if (hv < 0 && av >= 0) return { favoriteTeamId: homeId, spreadAbs: Math.abs(hv), provider };
+      if (av < 0 && hv >= 0) return { favoriteTeamId: awayId, spreadAbs: Math.abs(av), provider };
+    }
+    if (typeof hv === 'number' && hv < 0) return { favoriteTeamId: homeId, spreadAbs: Math.abs(hv), provider };
+    if (typeof av === 'number' && av < 0) return { favoriteTeamId: awayId, spreadAbs: Math.abs(av), provider };
   }
-  const details = typeof odds.details === 'string' ? odds.details.trim() : '';
-  if (details){
-    const m = details.match(/^(.+?)\s+([+-]?\d+(?:\.\d+)?)$/);
-    if (m){
-      const teamStr = m[1].trim();
-      const signed = parseFloat(m[2]);
-      if (!Number.isNaN(signed)){
-        const teamN = norm(teamStr), homeN = norm(homeName), awayN = norm(awayName);
-        let favId = null;
-        if (teamN.includes(homeN) || homeN.includes(teamN)) favId = homeId;
-        else if (teamN.includes(awayN) || awayN.includes(teamN)) favId = awayId;
-        if (favId !== null) return { favoriteTeamId: favId, spreadAbs: Math.abs(signed), provider };
+
+  // 2) Fallback: parse details text from odds (various formats)
+  const details = odds && typeof odds.details === 'string' ? odds.details.trim() : '';
+  if (details) {
+    // Try patterns like: "TeamName -6.5" or "ND -6.5 (home)" or "ND -6.5 - Team"
+    const patterns = [
+      /^(.*?)\s+([+-]?\d+(?:\.\d+)?)(?:\s|$)/i,     // Team ... number
+      /([+-]?\d+(?:\.\d+)?)\s+(.*?)$/i,             // number Team
+      /(.*?)[:\-–]\s*([+-]?\d+(?:\.\d+)?)/i        // Team - number
+    ];
+    for (const p of patterns) {
+      const m = details.match(p);
+      if (m && m[1] && m[2]) {
+        const maybeTeam = m[1].trim();
+        const maybeNum = parseFloat(m[2]);
+        if (!Number.isNaN(maybeNum)){
+          // Map maybeTeam to home/away by token matching or abbreviation
+          if (matchByTokens(maybeTeam, homeName) || matchByTokens(homeName, maybeTeam)) return { favoriteTeamId: homeId, spreadAbs: Math.abs(maybeNum), provider };
+          if (matchByTokens(maybeTeam, awayName) || matchByTokens(awayName, maybeTeam)) return { favoriteTeamId: awayId, spreadAbs: Math.abs(maybeNum), provider };
+          // try abbreviations: often details use short tokens like 'GT' or 'IND'
+          const homeAb = (comp?.competitors?.find(c=>c.homeAway==='home')?.team?.abbreviation) || '';
+          const awayAb = (comp?.competitors?.find(c=>c.homeAway==='away')?.team?.abbreviation) || '';
+          if (matchByTokens(maybeTeam, homeAb)) return { favoriteTeamId: homeId, spreadAbs: Math.abs(maybeNum), provider };
+          if (matchByTokens(maybeTeam, awayAb)) return { favoriteTeamId: awayId, spreadAbs: Math.abs(maybeNum), provider };
+          // no confident team match — still return magnitude but without favorite
+          if (DEBUG && odds) console.warn('odds not parsed', { details: odds.details, h: odds.homeTeamOdds?.spread, a: odds.awayTeamOdds?.spread, provider: odds.provider?.name, homeName, awayName, homeId, awayId });
+          return { favoriteTeamId: undefined, spreadAbs: Math.abs(maybeNum), provider };
+        }
       }
     }
   }
+
+  // 3) Top-level numeric indicators (less common) — try to find a magnitude
+  if (odds) {
+    const topCandidates = [odds.spread, odds.pointSpread, odds.handicap, odds.line];
+    for (const t of topCandidates) {
+      if (t == null) continue;
+      const n = typeof t === 'number' ? t : (typeof t === 'string' ? parseFloat(t.replace(/[^0-9\.\-+]/g,'')) : undefined);
+      if (typeof n === 'number' && !Number.isNaN(n)) return { favoriteTeamId: undefined, spreadAbs: Math.abs(n), provider };
+    }
+  }
+
+  if (DEBUG && odds) console.warn('odds not parsed', { details: odds.details, h: odds.homeTeamOdds?.spread, a: odds.awayTeamOdds?.spread, provider: odds.provider?.name, homeName, awayName, homeId, awayId });
   return null;
 }
 
@@ -248,8 +314,14 @@ function normalizeGames(events){
   const homeAbbrev = (homeComp?.team?.abbreviation || homeComp?.team?.shortDisplayName || '').toString();
   const awayAbbrev = (awayComp?.team?.abbreviation || awayComp?.team?.shortDisplayName || '').toString();
     if(!home||!away) continue;
-  const odds = (comp.odds && comp.odds[0]) || null;
-  const {spreadTeam, spread} = parseSpreadFromOdds(odds, home, away);
+  const odds0 = comp && Array.isArray(comp.odds) && comp.odds[0] ? comp.odds[0] : null;
+  const oddsRaw = odds0 ? {
+    details: typeof odds0.details === 'string' ? odds0.details : undefined,
+    homeSpread: typeof odds0.homeTeamOdds?.spread === 'number' ? odds0.homeTeamOdds.spread : undefined,
+    awaySpread: typeof odds0.awayTeamOdds?.spread === 'number' ? odds0.awayTeamOdds.spread : undefined,
+    provider: odds0.provider?.name
+  } : null;
+  const {spreadTeam, spread} = parseSpreadFromOdds(odds0, home, away);
   const fav = extractFavoriteAndSpread(comp, home, away, homeId, awayId);
   // If our robust extractor didn't return favorite/spread but parseSpreadFromOdds did,
   // try to map the spreadTeam (name) to a team id and use that spread magnitude.
@@ -300,7 +372,8 @@ function normalizeGames(events){
     awayScore,
     favoriteTeamId: favoriteTeamId,
     spreadAbs: spreadAbsVal,
-    source: { provider: fav?.provider || odds?.provider?.name || 'ESPN' }
+    source: { provider: fav?.provider || odds0?.provider?.name || 'ESPN' },
+    oddsRaw
   });
   }
   // Stable sort by kickoff then home name so client and server see the same ordering
@@ -721,6 +794,11 @@ function renderGame(g){
   }
   const spreadAbs = typeof g.spreadAbs === 'number' ? g.spreadAbs : (typeof g.spread === 'number' ? Math.abs(g.spread) : undefined);
   const line = signedLineForPick({ pickTeamId, favoriteTeamId, spreadAbs });
+  if (DEBUG) {
+    console.log('render', { pickTeam, pickTeamId, favoriteTeamId: g.favoriteTeamId, spreadAbs: g.spreadAbs, signed: line, oddsRaw: g.oddsRaw });
+    if (line !== 'PK' && !line.startsWith('+') && !line.startsWith('-')) console.error('Signed line missing sign', line);
+    if (line !== 'PK' && Number.isNaN(parseFloat(line.slice(1)))) console.error('Signed line not numeric', line);
+  }
   content.innerHTML = `
     <div class="teams">
       <div class="teambox away">
@@ -937,6 +1015,7 @@ function ensureDebugUI(){
 // pick deterministically for the week (seeded RNG), and render once.
 async function start(){
   renderLoadingNextLock();
+  try { setStatus('boot'); } catch(e){}
   // First try the Netlify function which provides the canonical server-side pick
   try {
     const r = await fetch('/.netlify/functions/current-pick', { cache: 'no-store' });
@@ -952,11 +1031,24 @@ async function start(){
   } catch (e) {
     console.warn('fetch to /.netlify/functions/current-pick failed', e);
   }
+  try { setStatus('serverless'); } catch(e){}
 
   // If function failed or returned nothing, fall back to client-side selection pipeline
   try {
     const events = await loadUpcomingGames();
     let games = normalizeGames(events);
+    // expose normalized games and oddsRaw for debugging
+    try {
+      if (typeof window !== 'undefined') {
+        window.lastNormalizedGames = (games || []).map(g => ({
+          id: g.id, home: g.home, away: g.away, homeId: g.homeId, awayId: g.awayId,
+          favoriteTeamId: g.favoriteTeamId, spreadAbs: g.spreadAbs,
+          oddsRaw: g.oddsRaw
+        }));
+        if (DEBUG) console.table(window.lastNormalizedGames);
+      }
+    } catch (e) {}
+    try { setStatus('client fallback'); } catch(e){}
     // If no events were returned (CORS/local dev), provide a small in-browser fallback so the UI doesn't stay stuck on loading.
     if ((!Array.isArray(games) || games.length === 0) && typeof window !== 'undefined'){
       console.warn('No events fetched from ESPN; using local fallback sample games for UI.');
@@ -987,7 +1079,7 @@ async function start(){
 
       if (pick) { console.log('client fallback pick', pick.id || 'unknown'); pick.meta = pick.meta || {}; pick.meta.path = pick.meta.path || 'client-fallback'; renderGame(pick); }
   else renderNoPickFound();
-
+      try { setStatus('sample fallback'); } catch(e){}
     try { checkAndUpdateStoredPick(games); } catch (e) { console.warn('check stored pick failed', e); }
     return;
   } catch (e) {
